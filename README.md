@@ -1,99 +1,102 @@
 # 🌐 Navia
 
-> Agente de navegador autónomo con IA. Le das una **instrucción en lenguaje natural** y abre un navegador **real** (Chrome o Firefox), lee la página, hace clic, llena formularios, extrae datos y opera **cualquier portal web** — como lo haría una persona.
+> AI-powered autonomous browser agent. Give it a **natural-language instruction** and it opens a **real** browser (Chrome or Firefox), reads the page, clicks, fills forms, extracts data, and operates **any web portal** — just like a person would.
 
-Funciona con tu **API key de Anthropic (Claude)**. Sin scripts a medida por sitio: la IA descubre los botones y campos en vivo con el método **navegar → leer → actuar → verificar**.
+Works with your **Anthropic (Claude) API key** — or with no key at all, using an AI CLI already signed in on your terminal. No per-site scripts: the AI discovers buttons and fields live, following the **navigate → read → act → verify** method.
 
 ```bash
-npx navia-ai "abre example.com y dime de qué trata la página"
+npx navia-ai "open example.com and tell me what the page is about"
 ```
 
 ---
 
-## ✨ Qué hace
+## ✨ What it does
 
-- 🧠 **Una instrucción, no un script.** Describes la tarea; Navia decide los pasos.
-- 🦊 **Chrome o Firefox reales** a elegir.
-- 🛡️ **Anti-Cloudflare incluido.** Modo `--browser chrome` que se conecta por **CDP a un Chrome real** → `navigator.webdriver=false` → pasa el muro "Just a moment…". No es evasión: es tu navegador.
-- 👁️ **Lee como humano:** árbol de accesibilidad (no píxeles) + screenshots para verificar con visión.
-- 🧩 **Extracción masiva** con JavaScript (listados → JSON).
-- 🔐 **Seguro por diseño:** pide confirmación antes de acciones irreversibles (enviar, pagar, borrar) y te cede la ventana para login / captcha / 2FA.
-- 📦 **CLI + librería** (TypeScript, ESM).
+- 🧠 **One instruction, not a script.** You describe the task; Navia decides the steps.
+- 🦊 **Real Chrome or Firefox**, your choice.
+- 🛡️ **Anti-Cloudflare built in.** `--browser chrome` mode connects via **CDP to a real Chrome** → `navigator.webdriver=false` → passes the "Just a moment…" wall. Not evasion: it's your own browser.
+- 👁️ **Reads like a human:** accessibility tree (not pixels) + screenshots for visual verification.
+- 🧩 **Bulk extraction** with JavaScript (lists → JSON).
+- 🔐 **Secure by design:** asks for confirmation before irreversible actions (submit, pay, delete) and hands you the window for login / captcha / 2FA.
+- 📦 **CLI + library** (TypeScript, ESM) **+ MCP server**.
 
-## 📦 Instalación
+## 📦 Installation
 
 ```bash
-npm install -g navia-ai      # global, para usar el comando `navia`
-# o sin instalar:
-npx navia-ai "tu tarea"
+npm install -g navia-ai      # global, to use the `navia` command
+# or without installing:
+npx navia-ai "your task"
 ```
 
-Primera vez (instala los navegadores de Playwright):
+First run (installs the Playwright browsers):
 
 ```bash
 npx playwright install chromium firefox
 ```
 
-Configura tu API key (archivo `.env` o variable de entorno):
+Set your API key (`.env` file or environment variable) — optional if you use the CLI provider (see below):
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-## 🚀 Uso (CLI)
+Run `navia doctor` anytime to check your environment is ready.
+
+## 🚀 Usage (CLI)
 
 ```bash
-# Navegador por defecto (Chromium)
-navia "busca 'camisetas' en example-shop.com y lístame los primeros 5 productos con precio"
+# Default browser (Chromium)
+navia "search 't-shirts' on example-shop.com and list the first 5 products with prices"
 
 # Firefox
-navia run "entra a mi-portal.com, inicia sesión y descarga mi última factura" --browser firefox
+navia run "go to my-portal.com, sign in, and download my latest invoice" --browser firefox
 
-# Chrome real (sitios con Cloudflare)
-navia chrome                                   # 1) lanza Chrome con depuración
-navia run "busca empleos de QA en {portal}" --browser chrome   # 2) la tarea
+# Real Chrome (Cloudflare-protected sites)
+navia chrome                                   # 1) launch Chrome with debugging
+navia run "search QA jobs on {portal}" --browser chrome   # 2) the task
 
-# Otras opciones
-navia "..." --headless           # sin ventana
-navia "..." --slow-mo 300        # ir lento (anti rate-limit)
-navia "..." --start-url https://...   # abrir una URL antes de empezar
-navia "..." --model claude-opus-4-8   # otro modelo
+# Other options
+navia "..." --headless           # no visible window
+navia "..." --slow-mo 300        # go slow (anti rate-limit)
+navia "..." --start-url https://...   # open a URL before starting
+navia "..." --model claude-opus-4-8   # another model
+navia "..." --workspace          # write a per-task log/brain folder (Obsidian/Desktop)
 ```
 
-Durante la ejecución:
-- Si hace falta **login / captcha / 2FA**, Navia pausa y te pasa la ventana.
-- Antes de algo **irreversible**, te pide confirmación (`s/N`).
+During a run:
+- If **login / captcha / 2FA** is needed, Navia pauses and hands you the window.
+- Before anything **irreversible**, it asks for confirmation (`y/N`). Use `--yes` to auto-approve (test environments only).
 
-### Sesiones / perfiles (no volver a loguear cada vez)
+### Sessions / profiles (don't log in every time)
 ```bash
-# 1) Inicia sesión una vez y guarda el perfil (cookies/almacenamiento)
-navia login mi-portal --browser chromium --start-url https://mi-portal.com/login
+# 1) Sign in once and save the profile (cookies/storage)
+navia login my-portal --browser chromium --start-url https://my-portal.com/login
 
-# 2) Reusa esa sesión: arranca ya autenticado, se salta el login/captcha
-navia run "descarga mi última factura" --profile mi-portal
+# 2) Reuse that session: start already authenticated, skip login/captcha
+navia run "download my latest invoice" --profile my-portal
 ```
-- El perfil se guarda en `~/.navia/profiles/` (cubierto por `.gitignore`).
-- Define **`NAVIA_SECRET`** para **cifrar** el perfil (AES-256-GCM). Contiene cookies de sesión — recomendado.
+- Profiles are saved in `~/.navia/profiles/` (covered by `.gitignore`).
+- Set **`NAVIA_SECRET`** to **encrypt** the profile (AES-256-GCM). It holds session cookies — recommended.
 
-### Credenciales y 2FA sin exponerlas a la IA
-Guarda contraseñas/2FA en un vault cifrado; la IA los **usa** por su clave pero **nunca ve el valor**:
+### Credentials and 2FA without exposing them to the AI
+Store passwords / 2FA in an encrypted vault; the AI **uses** them by key but **never sees the value**:
 ```bash
-navia secret set occ.password      # te pide la contraseña sin mostrarla
-navia secret totp occ.2fa          # te pide el secreto TOTP (base32 del authenticator)
-navia secret list                  # lista claves (sin valores)
+navia secret set occ.password      # prompts for the password without showing it
+navia secret totp occ.2fa          # prompts for the TOTP secret (base32 from your authenticator)
+navia secret list                  # lists keys (no values)
 ```
-Luego, en la tarea, la IA usa `fill_credential(ref, "occ.password")` y `fill_totp(ref, "occ.2fa")` — el valor real se inyecta localmente, fuera del prompt. (Cifrado con `NAVIA_SECRET`.)
+Then, in a task, the AI uses `fill_credential(ref, "occ.password")` and `fill_totp(ref, "occ.2fa")` — the real value is injected locally, outside the prompt. (Encrypted with `NAVIA_SECRET`.)
 
-## 🔌 Como servidor MCP (Claude Desktop / Code / Cursor)
+## 🔌 As an MCP server (Claude Desktop / Code / Cursor)
 
-Navia también se expone como **servidor MCP**: sus herramientas de navegador quedan disponibles dentro de tu cliente, y ahí el modelo del cliente las conduce (snapshot CDP, refs estables, detector de captcha, perfiles y vault incluidos).
+Navia also exposes itself as an **MCP server**: its browser tools become available inside your client, where the client's model drives them (CDP snapshot, stable refs, captcha detection, profiles, and vault all included).
 
 **Claude Code:**
 ```bash
 claude mcp add navia -- npx -y navia-ai mcp --browser chromium
 ```
 
-**Claude Desktop / Cursor** (config JSON):
+**Claude Desktop / Cursor** (JSON config):
 ```json
 {
   "mcpServers": {
@@ -101,79 +104,79 @@ claude mcp add navia -- npx -y navia-ai mcp --browser chromium
   }
 }
 ```
-Acepta `--profile <perfil>` (arranca autenticado) y `--browser chrome|firefox`. Las herramientas que necesitan TTY (`confirm_action`/`wait_for_human`) no se exponen: en MCP el humano aprueba en su propio cliente.
+Accepts `--profile <name>` (start authenticated) and `--browser chrome|firefox`. Tools that need a TTY (`confirm_action`/`wait_for_human`) are not exposed: in MCP the human approves inside their own client.
 
-## 🔑 Sin API key — usa el CLI de IA de tu terminal
+## 🔑 No API key — use your terminal's AI CLI
 
-Navia puede "pensar" con un CLI de IA **ya autenticado** en tu terminal, sin necesidad de `ANTHROPIC_API_KEY`:
-
-```bash
-navia run "..." --provider claude-cli                      # usa `claude` (Claude Code)
-navia run "..." --provider claude-cli --cli-command ant    # recomendado: Anthropic CLI
-```
-- En **`auto`** (por defecto), Navia usa `ANTHROPIC_API_KEY` si existe; si no, cae al CLI `claude`.
-- **`ant`** (Anthropic CLI) es el recomendado: `ant auth login` una vez → es un endpoint de completado limpio sobre tu login, ideal para el loop. `claude` sirve de *fallback* pero es más lento (es un agente, no un endpoint de completado).
-- **Cualquier otra IA de terminal:** define `NAVIA_CLI_CMD="mi-cli --flags"` (su stdout se toma como respuesta).
-
-> Nota: el modo CLI hace un proceso por paso → más lento que `--provider api`, pero no requiere key.
-
-## 🔁 Macros deterministas (grabar y reproducir, sin IA)
-
-Graba una corrida y reprodúcela cuantas veces quieras **sin LLM ni API key** (rápido y gratis). El replay usa **localizadores estables** (rol + nombre), no refs efímeros:
+Navia can "think" with an AI CLI **already authenticated** in your terminal, without an `ANTHROPIC_API_KEY`:
 
 ```bash
-navia "inicia sesión y descarga la factura del mes" --record ./factura.jsonl   # graba
-navia replay ./factura.jsonl --profile mi-portal                                # reproduce, sin IA
+navia run "..." --provider claude-cli                      # uses `claude` (Claude Code)
+navia run "..." --provider claude-cli --cli-command ant    # recommended: Anthropic CLI
 ```
-Ideal para flujos repetitivos ya validados. Los secretos no se guardan en la macro: `fill_credential`/`fill_totp` se reinyectan frescos desde el vault en cada replay.
+- In **`auto`** (default), Navia uses `ANTHROPIC_API_KEY` if present; otherwise it falls back to the `claude` CLI.
+- **`ant`** (Anthropic CLI) is recommended: `ant auth login` once → it's a clean single-shot completion endpoint over your login, ideal for the loop. `claude` works as a *fallback* but is slower (it's an agent, not a completion endpoint).
+- **Any other terminal AI:** set `NAVIA_CLI_CMD="my-cli --flags"` (its stdout is taken as the response).
 
-## 🧑‍💻 Uso (librería)
+> Note: CLI mode spawns one process per step → slower than `--provider api`, but needs no key.
+
+## 🔁 Deterministic macros (record and replay, no AI)
+
+Record a run and replay it as many times as you want **with no LLM and no API key** (fast and free). Replay uses **stable locators** (role + name), not ephemeral refs:
+
+```bash
+navia "sign in and download this month's invoice" --record ./invoice.jsonl   # record
+navia replay ./invoice.jsonl --profile my-portal                              # replay, no AI
+```
+Ideal for validated, repetitive flows. Secrets aren't stored in the macro: `fill_credential`/`fill_totp` are re-injected fresh from the vault on each replay.
+
+## 🧑‍💻 Usage (library)
 
 ```ts
 import { runNavia } from "navia-ai";
 
 const { summary, steps } = await runNavia({
-  task: "Abre example.com y extrae todos los enlaces del menú principal",
+  task: "Open example.com and extract all the main-menu links",
   browser: "chromium",
   hooks: {
     log: (m) => console.log(m),
-    confirmAction: async (desc) => /* tu lógica */ true,
-    waitForHuman: async (reason) => { /* resolver y */ return ""; },
+    confirmAction: async (desc) => /* your logic */ true,
+    waitForHuman: async (reason) => { /* resolve, then */ return ""; },
   },
 });
 
 console.log(summary);
 ```
 
-## 🔧 Cómo funciona (arquitectura)
+## 🔧 How it works (architecture)
 
 ```
-Tu instrucción ─► BrowserAgent (loop de tool-use con Claude)
+Your instruction ─► BrowserAgent (tool-use loop with Claude)
                       │  navigate · snapshot · click · type · fill_form · evaluate · wait_for · screenshot
                       ▼
                  BrowserDriver (Playwright)
                       ▼
-        Chrome real (CDP)  /  Firefox  /  Chromium  ─►  el sitio web
+        Real Chrome (CDP)  /  Firefox  /  Chromium  ─►  the website
 ```
 
-1. **snapshot** = árbol de accesibilidad con `ref` por elemento (la IA actúa por `ref`).
-   - En **Chromium/Chrome** el snapshot se construye con **CDP** (`Accessibility.getFullAXTree`): no muta el DOM, atraviesa **shadow DOM** e **iframes** (same-process por `frameId`; cross-origin/OOPIF como Turnstile vía sesión CDP propia, con refs compuestos `fN_id`), y los `ref` son **estables** (`backendNodeId`). Las acciones se resuelven por CDP.
-   - En **Firefox** (que no habla CDP) se usa un snapshot por inyección de JS como *fallback*; ahí los `ref` son efímeros → re-snapshotea tras cambios del DOM.
-2. **evaluate** ejecuta JS para extraer listados o resolver clics tercos.
-3. **detectChallenge** reconoce muros (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome) y cede la ventana al humano.
-4. El **system prompt** lleva destilado el método probado en producción.
+1. **snapshot** = accessibility tree with a `ref` per element (the AI acts by `ref`).
+   - On **Chromium/Chrome** the snapshot is built with **CDP** (`Accessibility.getFullAXTree`): it doesn't mutate the DOM, traverses **shadow DOM** and **iframes** (same-process via `frameId`; cross-origin/OOPIF like Turnstile via a dedicated CDP session, with composite refs `fN_id`), and `ref`s are **stable** (`backendNodeId`). Actions are resolved over CDP.
+   - On **Firefox** (which doesn't speak CDP) a JS-injection snapshot is used as a *fallback*; there `ref`s are ephemeral → re-snapshot after DOM changes.
+2. **evaluate** runs JS to extract lists or resolve stubborn clicks.
+3. **detectChallenge** recognizes walls (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome) and hands the window to the human.
+4. The **system prompt** carries the production-proven method, distilled.
 
-| Motor | Cuándo usarlo |
+| Engine | When to use it |
 |---|---|
-| `chromium` (default) | La mayoría de sitios. |
-| `firefox` | Alternativa; algunos portales se portan mejor. |
-| `chrome` (CDP) | 🔑 Sitios con muro **Cloudflare**. Lanza tu Chrome real y se conecta por CDP. |
-| `patchright` | 🥷 Anti-detección sin pre-abrir Chrome. Playwright parcheado (elimina el leak de `Runtime.enable`). Opt-in: `npm i patchright && npx patchright install chromium`. |
+| `chromium` (default) | Most sites. |
+| `firefox` | Alternative; some portals behave better. |
+| `chrome` (CDP) | 🔑 **Cloudflare**-walled sites. Launches your real Chrome and connects via CDP. |
+| `patchright` | 🥷 Anti-detection without pre-opening Chrome. Patched Playwright (removes the `Runtime.enable` leak). Opt-in: `npm i patchright && npx patchright install chromium`. |
 
-## ⚠️ Uso responsable
+## ⚠️ Responsible use
 
-Navia opera un navegador real con tus credenciales y tu sesión. Úsalo solo en sitios y cuentas **propias o con autorización**, respetando los Términos de Servicio. El truco CDP **no burla** protecciones por fuerza: usa tu navegador real. No incluye solvers de captcha ni stealth: cuando hace falta un humano (captcha/2FA), te cede la ventana.
+Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It ships no captcha solvers or stealth tricks: when a human is needed (captcha/2FA), it hands you the window.
 
-## 📄 Licencia
+## 📄 License
 
 MIT
