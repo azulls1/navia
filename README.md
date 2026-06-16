@@ -94,8 +94,10 @@ Tu instrucción ─► BrowserAgent (loop de tool-use con Claude)
 ```
 
 1. **snapshot** = árbol de accesibilidad con `ref` por elemento (la IA actúa por `ref`).
-2. Los `ref` son **efímeros**: se re-snapshotea tras cada cambio del DOM.
-3. **evaluate** ejecuta JS para extraer listados o resolver clics tercos.
+   - En **Chromium/Chrome** el snapshot se construye con **CDP** (`Accessibility.getFullAXTree`): no muta el DOM, atraviesa **shadow DOM**, y los `ref` son **estables** (`backendNodeId`). Las acciones se resuelven por CDP.
+   - En **Firefox** (que no habla CDP) se usa un snapshot por inyección de JS como *fallback*; ahí los `ref` son efímeros → re-snapshotea tras cambios del DOM.
+2. **evaluate** ejecuta JS para extraer listados o resolver clics tercos.
+3. **detectChallenge** reconoce muros (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome) y cede la ventana al humano.
 4. El **system prompt** lleva destilado el método probado en producción.
 
 | Motor | Cuándo usarlo |
