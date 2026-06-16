@@ -11,5 +11,6 @@ chrome-profile/
 *.storageState.json
 profiles/
 trajectories/
+*.jsonl
 *.pem
 *.key

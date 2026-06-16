@@ -236,12 +236,12 @@ export class BrowserDriver {
    * Reemplaza la "verificación" ficticia: si una acción no cambia nada observable,
    * la IA lo sabe y puede intentar otra cosa en vez de seguir a ciegas.
    */
-  async observe(): Promise<{ changed: boolean; url: string }> {
+  async observe(): Promise<{ changed: boolean; url: string; snapshot: string }> {
     const text = await this.readSnapshot();
     const sig = this.signatureOf(text);
     const changed = this.lastSig !== null && sig !== this.lastSig;
     this.lastSig = sig;
-    return { changed, url: this.page.url() };
+    return { changed, url: this.page.url(), snapshot: text };
   }
 
   /** storageState (cookies + localStorage) del contexto actual, para guardar un perfil. */

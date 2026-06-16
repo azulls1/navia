@@ -20,3 +20,4 @@ export type { BrowserEngine, LaunchOptions } from "./browser/launch.js";
 export { buildSystemPrompt } from "./agent/system-prompt.js";
 export { replayMacro } from "./agent/replay.js";
 export type { ReplayResult } from "./agent/replay.js";
+export { setSecret, setTotp, getSecret, getTotpSecret, listKeys } from "./secrets/vault.js";

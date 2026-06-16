@@ -229,15 +229,24 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
  * re-lee la página y devuelve un snapshot fresco para que el siguiente turno reintente
  * con refs vigentes — recuperación sin escalar a un error genérico.
  */
-async function wrapAction(driver: BrowserDriver, fn: () => Promise<string>): Promise<{ text: string }> {
+async function wrapAction(
+  driver: BrowserDriver,
+  fn: () => Promise<string>,
+  opts?: { verifyChange?: boolean },
+): Promise<{ text: string }> {
   try {
     const msg = await fn();
-    // Change-observation: verificación REAL de si la acción tuvo efecto observable.
+    // observe() ya re-lee la página → devolvemos el snapshot actualizado INLINE para que
+    // el agente no tenga que pedir snapshot por separado (≈43% de pasos eliminados).
     const obs = await driver.observe();
-    const verdict = obs.changed
-      ? "✓ La página cambió tras la acción."
-      : "⚠️ La página NO cambió de forma observable. ¿La acción tuvo efecto? Verifica con snapshot/screenshot o prueba otra cosa.";
-    return { text: `${msg}\n${verdict}` };
+    let verdict = "";
+    if (opts?.verifyChange !== false) {
+      // Solo para acciones que DEBERÍAN cambiar la página (ej. click); llenar un campo no.
+      verdict = obs.changed
+        ? "✓ La página cambió."
+        : "⚠️ La página NO cambió de forma observable. ¿La acción tuvo efecto? Prueba otra cosa.";
+    }
+    return { text: `${msg}${verdict ? `\n${verdict}` : ""}\n\n--- página actualizada ---\n${obs.snapshot}` };
   } catch (e) {
     const snap = await driver.snapshot().catch(() => "(no se pudo releer la página)");
     return {
@@ -261,7 +270,8 @@ export async function dispatchTool(
       const warn = ch
         ? `\n⚠️ Posible muro anti-bot/captcha detectado (${ch}). Llama a wait_for_human para que la persona lo resuelva en la ventana ANTES de continuar.`
         : "";
-      return { text: `Navegado a ${input.url}. Llama a snapshot para leer la página.${warn}` };
+      const snap = await driver.snapshot(); // devolvemos la página ya leída (evita un paso extra)
+      return { text: `Navegado a ${input.url}.${warn}\n\n--- página ---\n${snap}` };
     }
     case "snapshot": {
       const snap = await driver.snapshot();
@@ -273,37 +283,57 @@ export async function dispatchTool(
     case "click":
       return wrapAction(driver, async () => {
         await driver.click(input.ref);
-        return `Clic en ${input.ref}. Haz snapshot para ver el resultado.`;
+        return `Clic en ${input.ref}.`;
       });
     case "type":
-      return wrapAction(driver, async () => {
-        await driver.type(input.ref, input.text, { submit: input.submit, slowly: input.slowly });
-        return `Escrito en ${input.ref}.`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          await driver.type(input.ref, input.text, { submit: input.submit, slowly: input.slowly });
+          return `Escrito en ${input.ref}.`;
+        },
+        { verifyChange: false },
+      );
     case "fill_form":
-      return wrapAction(driver, async () => {
-        await driver.fillForm(input.fields as FillField[]);
-        return `Llenados ${input.fields.length} campos.`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          await driver.fillForm(input.fields as FillField[]);
+          return `Llenados ${input.fields.length} campos.`;
+        },
+        { verifyChange: false },
+      );
     case "select_option":
-      return wrapAction(driver, async () => {
-        await driver.selectOption(input.ref, input.values);
-        return `Seleccionado en ${input.ref}.`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          await driver.selectOption(input.ref, input.values);
+          return `Seleccionado en ${input.ref}.`;
+        },
+        { verifyChange: false },
+      );
     case "fill_credential":
-      return wrapAction(driver, async () => {
-        const value = await getSecret(input.key);
-        if (value == null) throw new Error(`No hay un secreto "${input.key}". Configúralo: navia secret set ${input.key}`);
-        await driver.type(input.ref, value);
-        return `Secreto "${input.key}" rellenado en ${input.ref} (valor oculto).`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          const value = await getSecret(input.key);
+          if (value == null) throw new Error(`No hay un secreto "${input.key}". Configúralo: navia secret set ${input.key}`);
+          await driver.type(input.ref, value);
+          return `Secreto "${input.key}" rellenado en ${input.ref} (valor oculto).`;
+        },
+        { verifyChange: false },
+      );
     case "fill_totp":
-      return wrapAction(driver, async () => {
-        const sec = await getTotpSecret(input.key);
-        if (!sec) throw new Error(`No hay TOTP "${input.key}". Configúralo: navia secret totp ${input.key} <base32>`);
-        await driver.type(input.ref, totp(sec));
-        return `Código 2FA de "${input.key}" rellenado en ${input.ref} (código oculto).`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          const sec = await getTotpSecret(input.key);
+          if (!sec) throw new Error(`No hay TOTP "${input.key}". Configúralo: navia secret totp ${input.key} <base32>`);
+          await driver.type(input.ref, totp(sec));
+          return `Código 2FA de "${input.key}" rellenado en ${input.ref} (código oculto).`;
+        },
+        { verifyChange: false },
+      );
     case "press_key":
       await driver.pressKey(input.key);
       return { text: `Tecla ${input.key} pulsada.` };
@@ -325,10 +355,14 @@ export async function dispatchTool(
       await driver.navigateBack();
       return { text: "Volviste a la página anterior." };
     case "upload_file":
-      return wrapAction(driver, async () => {
-        await driver.uploadFile(input.ref, input.paths as string[]);
-        return `Subidos ${input.paths.length} archivo(s) a ${input.ref}.`;
-      });
+      return wrapAction(
+        driver,
+        async () => {
+          await driver.uploadFile(input.ref, input.paths as string[]);
+          return `Subidos ${input.paths.length} archivo(s) a ${input.ref}.`;
+        },
+        { verifyChange: false },
+      );
     case "list_downloads": {
       const d = driver.listDownloads();
       return { text: d.length ? `Descargas:\n${d.join("\n")}` : "Sin descargas todavía." };
