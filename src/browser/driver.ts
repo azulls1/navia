@@ -335,6 +335,26 @@ export class BrowserDriver {
     await this.page.keyboard.press(key);
   }
 
+  /** Texto visible de la página (párrafos, etc., que el snapshot interactivo no incluye). */
+  async readText(): Promise<string> {
+    return (await this.page.evaluate(() => (document.body && document.body.innerText) || "").catch(() => "")) as string;
+  }
+
+  /** Desplaza la página, o hasta un elemento por ref (contenido lazy/infinito). */
+  async scroll(opts: { ref?: string; direction?: "up" | "down"; amount?: number }): Promise<void> {
+    if (opts.ref) {
+      if (this.refMode === "cdp" && this.cdp) {
+        const { session, objectId } = await this.resolveRef(opts.ref);
+        await this.callOn(session, objectId, 'function(){ this.scrollIntoView({block:"center"}); }');
+      } else {
+        await this.legacyLocator(opts.ref).scrollIntoViewIfNeeded().catch(() => {});
+      }
+      return;
+    }
+    const dy = (opts.amount ?? 700) * (opts.direction === "up" ? -1 : 1);
+    await this.page.evaluate((y) => window.scrollBy(0, y), dy);
+  }
+
   /** Ejecuta JS arbitrario en la página (extracción masiva / clics tercos). */
   async evaluate(code: string): Promise<unknown> {
     return this.page.evaluate(`(() => { ${code} })()`);

@@ -140,6 +140,23 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "read_text",
+    description: "Leer el TEXTO visible de la página (párrafos, artículos, etc., que el snapshot interactivo no incluye).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "scroll",
+    description: "Desplazar la página (direction up/down + amount px) o hasta un elemento por ref. Útil para contenido lazy/infinito.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string", description: "desplazar hasta este elemento (opcional)" },
+        direction: { type: "string", enum: ["up", "down"] },
+        amount: { type: "number", description: "píxeles a desplazar (default 700)" },
+      },
+    },
+  },
+  {
     name: "wait_for",
     description: "Esperar a que aparezca/desaparezca un texto, o un tiempo fijo (útil para anti-bot / carga).",
     input_schema: {
@@ -294,6 +311,13 @@ export async function dispatchTool(
       const result = await driver.evaluate(input.code);
       return { text: `Resultado:\n${JSON.stringify(result, null, 2).slice(0, 6000)}` };
     }
+    case "read_text": {
+      const txt = await driver.readText();
+      return { text: txt.trim() ? txt.slice(0, 6000) : "(sin texto visible)" };
+    }
+    case "scroll":
+      await driver.scroll({ ref: input.ref, direction: input.direction, amount: input.amount });
+      return { text: "Scroll hecho. Haz snapshot si esperas contenido nuevo." };
     case "wait_for":
       await driver.waitFor({ text: input.text, textGone: input.text_gone, timeMs: input.time_ms });
       return { text: "Espera completada." };

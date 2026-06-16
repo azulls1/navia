@@ -71,5 +71,14 @@ if (dlRef) {
   console.log(dls.length ? "✓ download OK: " + dls[dls.length - 1] : "ⓘ download no capturada (no crítico)");
 }
 
+// 6) read_text + scroll
+await driver.page.setContent(`<p>parrafo de prueba unico</p><div style="height:3000px"></div><p>fin</p>`);
+const text = await driver.readText();
+assert(text.includes("parrafo de prueba unico"), "read_text debe incluir el párrafo");
+await driver.scroll({ direction: "down", amount: 1000 });
+const y = await driver.evaluate("return window.scrollY");
+assert(y > 0, `scroll down debió mover la página (scrollY=${y})`);
+console.log("✓ read_text + scroll OK (scrollY=" + y + ")");
+
 await driver.close();
-console.log("\n✓ Smoke test OK (CDP + shadow DOM + click + type + tabs + upload + download)");
+console.log("\n✓ Smoke test OK (CDP + shadow DOM + click + type + tabs + upload + download + read_text + scroll)");
