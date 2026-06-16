@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export type BrowserEngine = "chromium" | "firefox" | "chrome";
+export type BrowserEngine = "chromium" | "firefox" | "chrome" | "patchright";
 
 export interface LaunchOptions {
   engine: BrowserEngine;
@@ -107,9 +107,47 @@ async function connectChromeCdp(opts: LaunchOptions): Promise<BrowserSession> {
   return { browser, context, attached: true, ownsContext: !existing };
 }
 
+/**
+ * Motor `patchright`: Playwright parcheado que elimina el leak de Runtime.enable y otras
+ * señales de automatización (la fuga anti-bot #1). Es opt-in (no es dependencia de Navia):
+ * el usuario instala `npm i patchright && npx patchright install chromium`. Lanza un
+ * contexto persistente con Chrome real (canal "chrome") para máximo sigilo.
+ */
+async function launchPatchright(opts: LaunchOptions): Promise<BrowserSession> {
+  let pw: any;
+  try {
+    const spec = "patchright"; // especificador dinámico: opcional, no se resuelve en build
+    pw = await import(spec);
+  } catch {
+    throw new Error(
+      "El motor 'patchright' es opcional y no está instalado. Instálalo:\n" +
+        "  npm i patchright && npx patchright install chromium\n" +
+        "o usa --browser chromium | chrome | firefox.",
+    );
+  }
+  const dataDir = opts.userDataDir ?? path.join(os.homedir(), ".navia", "patchright-profile");
+  const base = {
+    headless: opts.headless ?? false,
+    viewport: { width: 1366, height: 900 },
+    slowMo: opts.slowMo ?? 0,
+  };
+  let context;
+  try {
+    // Canal "chrome" (Chrome real instalado) = recomendado por patchright.
+    context = await pw.chromium.launchPersistentContext(dataDir, { ...base, channel: "chrome" });
+  } catch {
+    // Sin Chrome instalado → usa el Chromium de patchright.
+    context = await pw.chromium.launchPersistentContext(dataDir, base);
+  }
+  return { browser: context.browser() ?? undefined, context, attached: false, ownsContext: true };
+}
+
 export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession> {
   if (opts.engine === "chrome") {
     return connectChromeCdp(opts);
+  }
+  if (opts.engine === "patchright") {
+    return launchPatchright(opts);
   }
 
   // Endurecimiento básico anti-bot (señales JS clásicas). NO elimina el leak de
@@ -147,5 +185,8 @@ export async function closeSession(session: BrowserSession): Promise<void> {
     if (session.ownsContext) await session.context.close().catch(() => {});
     return;
   }
-  await session.browser?.close().catch(() => {});
+  // No-attached: cierra el browser; si es contexto persistente (patchright), no hay
+  // objeto browser → cerramos el contexto.
+  if (session.browser) await session.browser.close().catch(() => {});
+  else await session.context.close().catch(() => {});
 }

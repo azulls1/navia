@@ -158,6 +158,7 @@ Tu instrucción ─► BrowserAgent (loop de tool-use con Claude)
 | `chromium` (default) | La mayoría de sitios. |
 | `firefox` | Alternativa; algunos portales se portan mejor. |
 | `chrome` (CDP) | 🔑 Sitios con muro **Cloudflare**. Lanza tu Chrome real y se conecta por CDP. |
+| `patchright` | 🥷 Anti-detección sin pre-abrir Chrome. Playwright parcheado (elimina el leak de `Runtime.enable`). Opt-in: `npm i patchright && npx patchright install chromium`. |
 
 ## ⚠️ Uso responsable
 

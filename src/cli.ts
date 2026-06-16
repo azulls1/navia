@@ -99,7 +99,7 @@ async function runTask(task: string, flags: RunFlags) {
 
 const browserOpt = (cmd: Command) =>
   cmd
-    .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+    .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
     .option("-m, --model <model>", "modelo de Claude (default claude-sonnet-4-6)")
     .option("--headless", "ejecutar sin ventana visible")
     .option("--slow-mo <ms>", "ralentizar acciones N ms (útil para anti-bot)")
@@ -111,10 +111,19 @@ const browserOpt = (cmd: Command) =>
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
-// `navia run "tarea"`
-browserOpt(program.command("run").description("Ejecutar una tarea").argument("<task>", "qué hacer, en lenguaje natural")).action(
-  (task: string, flags: RunFlags) => runTask(task, flags),
-);
+// `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.
+browserOpt(
+  program
+    .command("run", { isDefault: true })
+    .description("Ejecutar una tarea (comando por defecto)")
+    .argument("[task]", "qué hacer, en lenguaje natural"),
+).action((task: string | undefined, flags: RunFlags) => {
+  if (!task) {
+    program.help();
+    return;
+  }
+  return runTask(task, flags);
+});
 
 // `navia chrome` — solo lanzar Chrome real con depuración (para el truco anti-Cloudflare)
 program
@@ -248,14 +257,5 @@ program
       cdpEndpoint: opts.cdpEndpoint,
     });
   });
-
-// Atajo: `navia "tarea"` (sin subcomando) → run
-browserOpt(program.argument("[task]", "tarea en lenguaje natural").action((task: string | undefined, flags: RunFlags) => {
-  if (!task) {
-    program.help();
-    return;
-  }
-  return runTask(task, flags);
-}));
 
 program.parseAsync();
