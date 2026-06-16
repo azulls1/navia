@@ -45,6 +45,7 @@ interface RunFlags {
   provider?: "auto" | "api" | "claude-cli";
   cliCommand?: string;
   record?: boolean | string;
+  yes?: boolean;
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -78,6 +79,10 @@ async function runTask(task: string, flags: RunFlags) {
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
         confirmAction: async (description) => {
+          if (flags.yes) {
+            console.log(pc.yellow(`\n⚠️  Auto-aprobado (--yes): ${description}`));
+            return true;
+          }
           console.log(pc.yellow(`\n⚠️  Acción que requiere confirmación:\n   ${description}`));
           const a = await ask(pc.yellow("¿Aprobar? (s/N): "));
           return a.toLowerCase() === "s" || a.toLowerCase() === "si" || a.toLowerCase() === "y";
@@ -112,6 +117,7 @@ const browserOpt = (cmd: Command) =>
     .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
     .option("--record [path]", "registrar la corrida en JSONL (~/.navia/trajectories/ o la ruta dada)")
+    .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.
