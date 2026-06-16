@@ -28,6 +28,10 @@ export interface NaviaOptions {
   userDataDir?: string;
   /** Nombre de perfil guardado con `navia login` para arrancar autenticado. */
   profile?: string;
+  /** Motor de inferencia: "auto" (default), "api" (ANTHROPIC_API_KEY) o "claude-cli" (CLI de la terminal). */
+  provider?: "auto" | "api" | "claude-cli";
+  /** Binario del CLI para provider claude-cli (default "claude"). */
+  cliCommand?: string;
   /** Máximo de pasos (iteraciones de tool use) antes de cortar. Default 60. */
   maxSteps?: number;
   /** Instrucciones extra para el system prompt. */
@@ -219,6 +223,21 @@ export class BrowserAgent {
   }
 }
 
+/** Decide el proveedor: explícito, o auto (API key si existe; si no, CLI claude). */
+export function resolveProvider(opts: NaviaOptions): "api" | "claude-cli" {
+  if (opts.provider && opts.provider !== "auto") return opts.provider;
+  return opts.apiKey || process.env.ANTHROPIC_API_KEY ? "api" : "claude-cli";
+}
+
 export async function runNavia(opts: NaviaOptions): Promise<NaviaResult> {
+  if (resolveProvider(opts) === "claude-cli") {
+    const { runViaCli } = await import("./cli-agent.js");
+    const hooks: AgentHooks = {
+      confirmAction: opts.hooks?.confirmAction ?? (async () => false),
+      waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
+      log: opts.hooks?.log,
+    };
+    return runViaCli(opts, hooks);
+  }
   return new BrowserAgent(opts).run();
 }

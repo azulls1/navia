@@ -103,6 +103,20 @@ claude mcp add navia -- npx -y navia-ai mcp --browser chromium
 ```
 Acepta `--profile <perfil>` (arranca autenticado) y `--browser chrome|firefox`. Las herramientas que necesitan TTY (`confirm_action`/`wait_for_human`) no se exponen: en MCP el humano aprueba en su propio cliente.
 
+## 🔑 Sin API key — usa el CLI de IA de tu terminal
+
+Navia puede "pensar" con un CLI de IA **ya autenticado** en tu terminal, sin necesidad de `ANTHROPIC_API_KEY`:
+
+```bash
+navia run "..." --provider claude-cli                      # usa `claude` (Claude Code)
+navia run "..." --provider claude-cli --cli-command ant    # recomendado: Anthropic CLI
+```
+- En **`auto`** (por defecto), Navia usa `ANTHROPIC_API_KEY` si existe; si no, cae al CLI `claude`.
+- **`ant`** (Anthropic CLI) es el recomendado: `ant auth login` una vez → es un endpoint de completado limpio sobre tu login, ideal para el loop. `claude` sirve de *fallback* pero es más lento (es un agente, no un endpoint de completado).
+- **Cualquier otra IA de terminal:** define `NAVIA_CLI_CMD="mi-cli --flags"` (su stdout se toma como respuesta).
+
+> Nota: el modo CLI hace un proceso por paso → más lento que `--provider api`, pero no requiere key.
+
 ## 🧑‍💻 Uso (librería)
 
 ```ts

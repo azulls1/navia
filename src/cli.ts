@@ -14,7 +14,7 @@ import { config as loadEnv } from "dotenv";
 import pc from "picocolors";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { runNavia } from "./agent/agent.js";
+import { runNavia, resolveProvider } from "./agent/agent.js";
 import { BrowserDriver } from "./browser/driver.js";
 import { saveSession } from "./browser/session-store.js";
 import { setSecret, setTotp, listKeys } from "./secrets/vault.js";
@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.3.0");
+  .version("0.4.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -42,18 +42,22 @@ interface RunFlags {
   startUrl?: string;
   maxSteps?: string;
   profile?: string;
+  provider?: "auto" | "api" | "claude-cli";
+  cliCommand?: string;
 }
 
 async function runTask(task: string, flags: RunFlags) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error(pc.red("✗ Falta ANTHROPIC_API_KEY. Ponla en un archivo .env o como variable de entorno."));
+  const provider = resolveProvider({ task, provider: flags.provider, apiKey: undefined });
+  if (provider === "api" && !process.env.ANTHROPIC_API_KEY) {
+    console.error(pc.red("✗ Provider 'api' sin ANTHROPIC_API_KEY. Pon la key, usa --provider claude-cli, o instala el CLI `claude`."));
     process.exit(1);
   }
 
   const rl = createInterface({ input, output });
   const ask = async (q: string) => (await rl.question(q)).trim();
 
-  console.log(pc.cyan(`\n🌐 Navia — ${flags.browser}\n`) + pc.dim(`Tarea: ${task}\n`));
+  const motor = provider === "claude-cli" ? `${flags.browser} · IA: CLI (${flags.cliCommand ?? "claude"})` : `${flags.browser} · IA: API`;
+  console.log(pc.cyan(`\n🌐 Navia — ${motor}\n`) + pc.dim(`Tarea: ${task}\n`));
 
   try {
     const result = await runNavia({
@@ -66,6 +70,8 @@ async function runTask(task: string, flags: RunFlags) {
       cdpEndpoint: flags.cdpEndpoint,
       startUrl: flags.startUrl,
       profile: flags.profile,
+      provider: flags.provider,
+      cliCommand: flags.cliCommand,
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
@@ -101,6 +107,8 @@ const browserOpt = (cmd: Command) =>
     .option("--cdp-endpoint <url>", "conectar a un Chrome ya abierto, ej http://localhost:9222")
     .option("--start-url <url>", "abrir esta URL antes de empezar")
     .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)")
+    .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
+    .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"`
