@@ -11,8 +11,8 @@
  * ($NAVIA_OBSIDIAN o carpetas típicas) · Escritorio. Así, si se interrumpe la corrida,
  * queda registro de dónde iba y se puede retomar/replay.
  */
-import { mkdir, appendFile, writeFile, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { mkdir, appendFile, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -36,18 +36,28 @@ function slugify(task: string): string {
   );
 }
 
-/** Busca un vault de Obsidian para guardar ahí el workspace (memoria persistente). */
-async function findObsidianBase(): Promise<string | null> {
+/**
+ * Busca un vault de Obsidian para guardar ahí el workspace (memoria persistente).
+ * Genérico: respeta $NAVIA_OBSIDIAN, o escanea ~/Documents y ~ buscando cualquier carpeta
+ * que contenga `.obsidian` (la firma de un vault). No hardcodea nombres personales.
+ */
+function findObsidianBase(): string | null {
   if (process.env.NAVIA_OBSIDIAN && existsSync(process.env.NAVIA_OBSIDIAN)) return process.env.NAVIA_OBSIDIAN;
   const home = os.homedir();
-  const candidates = [
-    path.join(home, "Documents", "Boveda Sam"),
-    path.join(home, "Documents", "Obsidian"),
-    path.join(home, "Obsidian"),
-  ];
-  for (const c of candidates) {
-    // Un vault de Obsidian tiene una carpeta .obsidian; si no, basta con que exista.
-    if (existsSync(c)) return c;
+  const roots = [path.join(home, "Documents"), home, path.join(home, "Obsidian")];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    // ¿El propio root es un vault?
+    if (existsSync(path.join(root, ".obsidian"))) return root;
+    // ¿Algún hijo directo es un vault?
+    try {
+      for (const name of readdirSync(root)) {
+        const child = path.join(root, name);
+        if (existsSync(path.join(child, ".obsidian"))) return child;
+      }
+    } catch {
+      /* sin permisos de lectura → siguiente */
+    }
   }
   return null;
 }
@@ -55,7 +65,7 @@ async function findObsidianBase(): Promise<string | null> {
 async function resolveBase(explicit?: string): Promise<{ base: string; where: string }> {
   if (explicit) return { base: explicit, where: explicit };
   if (process.env.NAVIA_WORKSPACE) return { base: process.env.NAVIA_WORKSPACE, where: process.env.NAVIA_WORKSPACE };
-  const obs = await findObsidianBase();
+  const obs = findObsidianBase();
   if (obs) return { base: path.join(obs, "Navia Runs"), where: `Obsidian (${obs})` };
   const desktop = path.join(os.homedir(), "Desktop");
   const base = existsSync(desktop) ? desktop : os.homedir();
