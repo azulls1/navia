@@ -6,6 +6,8 @@
  *   navia run "..." --browser firefox                    # elegir motor
  *   navia run "..." --browser chrome                     # Chrome real vía CDP (anti-Cloudflare)
  *   navia chrome                                         # solo lanzar Chrome real con depuración
+ *   navia login <perfil>                                 # iniciar sesión y guardar perfil
+ *   navia secret set <clave>                             # guardar un secreto cifrado
  */
 import { Command } from "commander";
 import { config as loadEnv } from "dotenv";
@@ -15,6 +17,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { runNavia } from "./agent/agent.js";
 import { BrowserDriver } from "./browser/driver.js";
 import { saveSession } from "./browser/session-store.js";
+import { setSecret, setTotp, listKeys } from "./secrets/vault.js";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserEngine } from "./browser/launch.js";
@@ -111,8 +114,6 @@ program
   .option("--cdp-port <port>", "puerto", "9222")
   .action(async (opts: { cdpPort: string }) => {
     const { spawn } = await import("node:child_process");
-    const os = await import("node:os");
-    const path = await import("node:path");
     const { existsSync } = await import("node:fs");
     const candidates =
       process.platform === "win32"
@@ -132,6 +133,64 @@ program
     }).unref();
     console.log(pc.green(`✓ Chrome lanzado con depuración en el puerto ${opts.cdpPort}.`));
     console.log(pc.dim(`Ahora ejecuta:  navia run "tu tarea" --browser chrome --cdp-port ${opts.cdpPort}`));
+  });
+
+/** Lee una línea sin eco (para secretos), para no dejarlos en el historial del shell. */
+function promptHidden(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const stdin = process.stdin;
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    let val = "";
+    const onData = (chunk: string) => {
+      const code = chunk.charCodeAt(0);
+      if (code === 13 || code === 10 || code === 4) {
+        // Enter / EOT → terminar
+        stdin.setRawMode?.(false);
+        stdin.pause();
+        stdin.removeListener("data", onData);
+        process.stdout.write("\n");
+        resolve(val);
+      } else if (code === 3) {
+        process.exit(1); // Ctrl-C
+      } else if (code === 127 || code === 8) {
+        val = val.slice(0, -1); // backspace
+      } else {
+        val += chunk;
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+// `navia secret …` — gestiona secretos cifrados (para fill_credential / fill_totp)
+const secret = program.command("secret").description("Gestiona secretos cifrados (contraseñas, TOTP) para fill_credential/fill_totp");
+secret
+  .command("set <clave>")
+  .description("Guarda una contraseña/secreto (te lo pide sin mostrarlo)")
+  .action(async (clave: string) => {
+    if (!process.env.NAVIA_SECRET) console.log(pc.yellow("⚠️  Sin NAVIA_SECRET el vault se guarda en claro. Define NAVIA_SECRET para cifrarlo."));
+    const value = await promptHidden(`Valor para "${clave}" (no se muestra): `);
+    await setSecret(clave, value);
+    console.log(pc.green(`✓ Secreto "${clave}" guardado. Úsalo con fill_credential(ref, "${clave}").`));
+  });
+secret
+  .command("totp <clave>")
+  .description("Guarda un secreto TOTP en base32 (te lo pide sin mostrarlo)")
+  .action(async (clave: string) => {
+    const value = await promptHidden(`Secreto TOTP (base32) para "${clave}": `);
+    await setTotp(clave, value.replace(/\s/g, ""));
+    console.log(pc.green(`✓ TOTP "${clave}" guardado. Úsalo con fill_totp(ref, "${clave}").`));
+  });
+secret
+  .command("list")
+  .description("Lista las claves guardadas (no muestra valores)")
+  .action(async () => {
+    const { secrets, totp } = await listKeys();
+    console.log(pc.cyan("Secretos:"), secrets.length ? secrets.join(", ") : pc.dim("(ninguno)"));
+    console.log(pc.cyan("TOTP:"), totp.length ? totp.join(", ") : pc.dim("(ninguno)"));
   });
 
 // `navia login <perfil>` — abre el navegador para iniciar sesión y guarda el perfil.

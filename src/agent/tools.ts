@@ -4,6 +4,8 @@
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import type { BrowserDriver, FillField } from "../browser/driver.js";
+import { getSecret, getTotpSecret } from "../secrets/vault.js";
+import { totp } from "../secrets/totp.js";
 
 export interface AgentHooks {
   /** Pedir confirmación humana para una acción irreversible. Devuelve true si se aprueba. */
@@ -90,6 +92,32 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         values: { type: "array", items: { type: "string" } },
       },
       required: ["ref", "values"],
+    },
+  },
+  {
+    name: "fill_credential",
+    description:
+      "Rellenar un campo con un SECRETO guardado (contraseña, etc.) por su CLAVE, sin exponer el valor. El usuario lo configuró con `navia secret set <clave>`. Úsalo en vez de type para contraseñas.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        key: { type: "string", description: 'clave del secreto, ej "occ.password"' },
+      },
+      required: ["ref", "key"],
+    },
+  },
+  {
+    name: "fill_totp",
+    description:
+      "Calcular el código 2FA (TOTP) actual desde un secreto guardado por su CLAVE y rellenarlo, sin exponer el secreto. El usuario lo configuró con `navia secret totp <clave>`.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        key: { type: "string", description: 'clave del TOTP, ej "occ.2fa"' },
+      },
+      required: ["ref", "key"],
     },
   },
   {
@@ -214,6 +242,20 @@ export async function dispatchTool(
       return wrapAction(driver, async () => {
         await driver.selectOption(input.ref, input.values);
         return `Seleccionado en ${input.ref}.`;
+      });
+    case "fill_credential":
+      return wrapAction(driver, async () => {
+        const value = await getSecret(input.key);
+        if (value == null) throw new Error(`No hay un secreto "${input.key}". Configúralo: navia secret set ${input.key}`);
+        await driver.type(input.ref, value);
+        return `Secreto "${input.key}" rellenado en ${input.ref} (valor oculto).`;
+      });
+    case "fill_totp":
+      return wrapAction(driver, async () => {
+        const sec = await getTotpSecret(input.key);
+        if (!sec) throw new Error(`No hay TOTP "${input.key}". Configúralo: navia secret totp ${input.key} <base32>`);
+        await driver.type(input.ref, totp(sec));
+        return `Código 2FA de "${input.key}" rellenado en ${input.ref} (código oculto).`;
       });
     case "press_key":
       await driver.pressKey(input.key);

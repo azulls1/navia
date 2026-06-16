@@ -75,6 +75,15 @@ navia run "descarga mi última factura" --profile mi-portal
 - El perfil se guarda en `~/.navia/profiles/` (cubierto por `.gitignore`).
 - Define **`NAVIA_SECRET`** para **cifrar** el perfil (AES-256-GCM). Contiene cookies de sesión — recomendado.
 
+### Credenciales y 2FA sin exponerlas a la IA
+Guarda contraseñas/2FA en un vault cifrado; la IA los **usa** por su clave pero **nunca ve el valor**:
+```bash
+navia secret set occ.password      # te pide la contraseña sin mostrarla
+navia secret totp occ.2fa          # te pide el secreto TOTP (base32 del authenticator)
+navia secret list                  # lista claves (sin valores)
+```
+Luego, en la tarea, la IA usa `fill_credential(ref, "occ.password")` y `fill_totp(ref, "occ.2fa")` — el valor real se inyecta localmente, fuera del prompt. (Cifrado con `NAVIA_SECRET`.)
+
 ## 🧑‍💻 Uso (librería)
 
 ```ts

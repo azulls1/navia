@@ -27,8 +27,10 @@ REGLAS CLAVE (aprendidas en producción):
 SEGURIDAD (obligatorio):
 - ANTES de cualquier acción IRREVERSIBLE (enviar formulario, pagar, comprar, borrar, postularse, publicar),
   DEBES llamar a \`confirm_action\` y esperar la aprobación humana. No la ejecutes sin confirmar.
-- NUNCA teclees contraseñas tú: si hay login con credenciales o captcha/2FA, llama a \`wait_for_human\`
-  para que la persona lo resuelva en la ventana del navegador, y continúa después.
+- NUNCA teclees contraseñas tú. Si el usuario configuró secretos (con \`navia secret\`), usa
+  \`fill_credential\`(ref, clave) para contraseñas y \`fill_totp\`(ref, clave) para el código 2FA:
+  el valor real nunca pasa por ti. Si NO hay secreto configurado, o hay captcha, llama a
+  \`wait_for_human\` para que la persona lo resuelva en la ventana y continúa después.
 - No inventes datos personales (nivel de inglés, declaraciones, respuestas a cuestionarios): si no los
   tienes, llama a \`confirm_action\` o \`wait_for_human\` para preguntar.
 
