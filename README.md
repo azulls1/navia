@@ -84,6 +84,25 @@ navia secret list                  # lista claves (sin valores)
 ```
 Luego, en la tarea, la IA usa `fill_credential(ref, "occ.password")` y `fill_totp(ref, "occ.2fa")` — el valor real se inyecta localmente, fuera del prompt. (Cifrado con `NAVIA_SECRET`.)
 
+## 🔌 Como servidor MCP (Claude Desktop / Code / Cursor)
+
+Navia también se expone como **servidor MCP**: sus herramientas de navegador quedan disponibles dentro de tu cliente, y ahí el modelo del cliente las conduce (snapshot CDP, refs estables, detector de captcha, perfiles y vault incluidos).
+
+**Claude Code:**
+```bash
+claude mcp add navia -- npx -y navia-ai mcp --browser chromium
+```
+
+**Claude Desktop / Cursor** (config JSON):
+```json
+{
+  "mcpServers": {
+    "navia": { "command": "npx", "args": ["-y", "navia-ai", "mcp", "--browser", "chromium"] }
+  }
+}
+```
+Acepta `--profile <perfil>` (arranca autenticado) y `--browser chrome|firefox`. Las herramientas que necesitan TTY (`confirm_action`/`wait_for_human`) no se exponen: en MCP el humano aprueba en su propio cliente.
+
 ## 🧑‍💻 Uso (librería)
 
 ```ts

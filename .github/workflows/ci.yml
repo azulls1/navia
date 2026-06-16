@@ -39,5 +39,7 @@ jobs:
       - run: npm run build
       - name: Instalar Chromium de Playwright
         run: npx playwright install --with-deps chromium
-      - name: Ejecutar smoke test
+      - name: Ejecutar smoke test (driver + CDP)
         run: node examples/smoke.mjs
+      - name: Ejecutar smoke test (servidor MCP)
+        run: node examples/mcp-smoke.mjs

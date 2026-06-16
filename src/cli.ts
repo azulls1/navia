@@ -18,6 +18,7 @@ import { runNavia } from "./agent/agent.js";
 import { BrowserDriver } from "./browser/driver.js";
 import { saveSession } from "./browser/session-store.js";
 import { setSecret, setTotp, listKeys } from "./secrets/vault.js";
+import { startMcpServer } from "./mcp/server.js";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserEngine } from "./browser/launch.js";
@@ -29,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.2.0");
+  .version("0.3.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -219,6 +220,25 @@ program
       await driver.close();
       rl.close();
     }
+  });
+
+// `navia mcp` — servidor MCP por stdio (para Claude Desktop/Code/Cursor)
+program
+  .command("mcp")
+  .description("Iniciar Navia como servidor MCP (stdio): expone sus herramientas de navegador a un cliente MCP.")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-p, --profile <name>", "perfil guardado con 'navia login' (arranca autenticado)")
+  .option("--headless", "ejecutar sin ventana visible")
+  .option("--cdp-port <port>", "puerto de depuración para --browser chrome")
+  .option("--cdp-endpoint <url>", "conectar a un Chrome ya abierto")
+  .action(async (opts: { browser: BrowserEngine; profile?: string; headless?: boolean; cdpPort?: string; cdpEndpoint?: string }) => {
+    await startMcpServer({
+      browser: opts.browser,
+      profile: opts.profile,
+      headless: opts.headless,
+      cdpPort: opts.cdpPort ? Number(opts.cdpPort) : undefined,
+      cdpEndpoint: opts.cdpEndpoint,
+    });
   });
 
 // Atajo: `navia "tarea"` (sin subcomando) → run
