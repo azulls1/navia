@@ -8,6 +8,7 @@
  *  - Legacy (firefox, que no habla CDP): el snapshot por inyección de JS de snapshot.ts.
  */
 import type { Page, CDPSession } from "playwright";
+import { createHash } from "node:crypto";
 import { takeSnapshot, REF_ATTR } from "./snapshot.js";
 import { parseAxTree, type AXNode } from "./cdp-snapshot.js";
 import { launchBrowser, closeSession, type BrowserSession, type LaunchOptions, type BrowserEngine } from "./launch.js";
@@ -24,6 +25,8 @@ export class BrowserDriver {
   /** undefined = aún no se intentó; null = no disponible (firefox); CDPSession = activo. */
   private cdp?: CDPSession | null;
   private refMode: "cdp" | "legacy" = "legacy";
+  /** Firma del último estado observado (url + hash del snapshot), para change-observation. */
+  private lastSig: string | null = null;
   page!: Page;
 
   static async create(opts: LaunchOptions): Promise<BrowserDriver> {
@@ -80,7 +83,8 @@ export class BrowserDriver {
     await this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   }
 
-  async snapshot(): Promise<string> {
+  /** Lee la página (CDP o legacy) y devuelve el texto del snapshot. */
+  private async readSnapshot(): Promise<string> {
     await this.page.waitForLoadState("domcontentloaded").catch(() => {});
     const cdp = await this.ensureCdp();
     if (cdp) {
@@ -96,6 +100,34 @@ export class BrowserDriver {
     }
     this.refMode = "legacy";
     return takeSnapshot(this.page);
+  }
+
+  async snapshot(): Promise<string> {
+    const text = await this.readSnapshot();
+    this.lastSig = this.signatureOf(text);
+    return text;
+  }
+
+  private signatureOf(snapshotText: string): string {
+    return createHash("sha1").update(this.page.url() + "\n" + snapshotText).digest("hex");
+  }
+
+  /**
+   * Change-observation: ¿la página cambió respecto al último snapshot/observación?
+   * Reemplaza la "verificación" ficticia: si una acción no cambia nada observable,
+   * la IA lo sabe y puede intentar otra cosa en vez de seguir a ciegas.
+   */
+  async observe(): Promise<{ changed: boolean; url: string }> {
+    const text = await this.readSnapshot();
+    const sig = this.signatureOf(text);
+    const changed = this.lastSig !== null && sig !== this.lastSig;
+    this.lastSig = sig;
+    return { changed, url: this.page.url() };
+  }
+
+  /** storageState (cookies + localStorage) del contexto actual, para guardar un perfil. */
+  async getStorageState(): Promise<unknown> {
+    return this.session.context.storageState();
   }
 
   async click(ref: string): Promise<void> {

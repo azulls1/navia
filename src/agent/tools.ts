@@ -156,7 +156,13 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
  */
 async function wrapAction(driver: BrowserDriver, fn: () => Promise<string>): Promise<{ text: string }> {
   try {
-    return { text: await fn() };
+    const msg = await fn();
+    // Change-observation: verificación REAL de si la acción tuvo efecto observable.
+    const obs = await driver.observe();
+    const verdict = obs.changed
+      ? "✓ La página cambió tras la acción."
+      : "⚠️ La página NO cambió de forma observable. ¿La acción tuvo efecto? Verifica con snapshot/screenshot o prueba otra cosa.";
+    return { text: `${msg}\n${verdict}` };
   } catch (e) {
     const snap = await driver.snapshot().catch(() => "(no se pudo releer la página)");
     return {

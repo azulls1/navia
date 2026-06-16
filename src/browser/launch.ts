@@ -30,6 +30,8 @@ export interface LaunchOptions {
   cdpEndpoint?: string;
   /** Perfil dedicado para el Chrome real (no toca tu Chrome normal). */
   userDataDir?: string;
+  /** storageState de Playwright (cookies+localStorage) para arrancar autenticado (chromium/firefox). */
+  storageState?: unknown;
 }
 
 export interface BrowserSession {
@@ -131,6 +133,7 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
         });
   const context = await browser.newContext({
     viewport: { width: 1366, height: 900 },
+    storageState: (opts.storageState as any) ?? undefined,
   });
   return { browser, context, attached: false, ownsContext: true };
 }

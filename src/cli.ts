@@ -13,6 +13,10 @@ import pc from "picocolors";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { runNavia } from "./agent/agent.js";
+import { BrowserDriver } from "./browser/driver.js";
+import { saveSession } from "./browser/session-store.js";
+import os from "node:os";
+import path from "node:path";
 import type { BrowserEngine } from "./browser/launch.js";
 
 loadEnv({ quiet: true });
@@ -33,6 +37,7 @@ interface RunFlags {
   cdpEndpoint?: string;
   startUrl?: string;
   maxSteps?: string;
+  profile?: string;
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -56,6 +61,7 @@ async function runTask(task: string, flags: RunFlags) {
       cdpPort: flags.cdpPort ? Number(flags.cdpPort) : undefined,
       cdpEndpoint: flags.cdpEndpoint,
       startUrl: flags.startUrl,
+      profile: flags.profile,
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
@@ -90,6 +96,7 @@ const browserOpt = (cmd: Command) =>
     .option("--cdp-port <port>", "puerto de depuración para --browser chrome (default 9222)")
     .option("--cdp-endpoint <url>", "conectar a un Chrome ya abierto, ej http://localhost:9222")
     .option("--start-url <url>", "abrir esta URL antes de empezar")
+    .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"`
@@ -125,6 +132,34 @@ program
     }).unref();
     console.log(pc.green(`✓ Chrome lanzado con depuración en el puerto ${opts.cdpPort}.`));
     console.log(pc.dim(`Ahora ejecuta:  navia run "tu tarea" --browser chrome --cdp-port ${opts.cdpPort}`));
+  });
+
+// `navia login <perfil>` — abre el navegador para iniciar sesión y guarda el perfil.
+program
+  .command("login <perfil>")
+  .description("Abre el navegador para que inicies sesión y guarda la sesión (cookies/almacenamiento) en un perfil reutilizable.")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("--start-url <url>", "URL del login a abrir")
+  .action(async (perfil: string, opts: { browser: BrowserEngine; startUrl?: string }) => {
+    const rl = createInterface({ input, output });
+    const driver = await BrowserDriver.create({
+      engine: opts.browser,
+      headless: false,
+      userDataDir: opts.browser === "chrome" ? path.join(os.homedir(), ".navia", "profiles", `chrome-${perfil}`) : undefined,
+    });
+    try {
+      if (opts.startUrl) await driver.navigate(opts.startUrl);
+      console.log(pc.yellow(`\n🔐 Inicia sesión en la ventana del navegador (resuelve captcha/2FA si aparece).`));
+      await rl.question(pc.yellow("Cuando hayas iniciado sesión, presiona Enter para guardar el perfil… "));
+      const state = await driver.getStorageState();
+      const { file, encrypted } = await saveSession(perfil, state);
+      console.log(pc.green(`✓ Perfil "${perfil}" guardado${encrypted ? " (cifrado)" : ""}: ${file}`));
+      if (!encrypted) console.log(pc.dim("  Tip: define NAVIA_SECRET para cifrar el perfil (contiene cookies de sesión)."));
+      console.log(pc.dim(`  Úsalo:  navia run "tu tarea" --browser ${opts.browser} --profile ${perfil}`));
+    } finally {
+      await driver.close();
+      rl.close();
+    }
   });
 
 // Atajo: `navia "tarea"` (sin subcomando) → run

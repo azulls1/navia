@@ -64,6 +64,17 @@ Durante la ejecución:
 - Si hace falta **login / captcha / 2FA**, Navia pausa y te pasa la ventana.
 - Antes de algo **irreversible**, te pide confirmación (`s/N`).
 
+### Sesiones / perfiles (no volver a loguear cada vez)
+```bash
+# 1) Inicia sesión una vez y guarda el perfil (cookies/almacenamiento)
+navia login mi-portal --browser chromium --start-url https://mi-portal.com/login
+
+# 2) Reusa esa sesión: arranca ya autenticado, se salta el login/captcha
+navia run "descarga mi última factura" --profile mi-portal
+```
+- El perfil se guarda en `~/.navia/profiles/` (cubierto por `.gitignore`).
+- Define **`NAVIA_SECRET`** para **cifrar** el perfil (AES-256-GCM). Contiene cookies de sesión — recomendado.
+
 ## 🧑‍💻 Uso (librería)
 
 ```ts

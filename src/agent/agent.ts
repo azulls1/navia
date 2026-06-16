@@ -4,10 +4,13 @@
  * el navegador y le devolvemos el resultado, hasta que termina con un resumen en texto.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import os from "node:os";
+import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
+import { loadSession } from "../browser/session-store.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -23,6 +26,8 @@ export interface NaviaOptions {
   cdpPort?: number;
   cdpEndpoint?: string;
   userDataDir?: string;
+  /** Nombre de perfil guardado con `navia login` para arrancar autenticado. */
+  profile?: string;
   /** Máximo de pasos (iteraciones de tool use) antes de cortar. Default 60. */
   maxSteps?: number;
   /** Instrucciones extra para el system prompt. */
@@ -103,13 +108,29 @@ export class BrowserAgent {
   }
 
   async run(): Promise<NaviaResult> {
+    const engine = this.opts.browser ?? "chromium";
+
+    // Perfil: en chrome (CDP) la persistencia es el userDataDir; en chromium/firefox
+    // se inyecta el storageState guardado.
+    let storageState: unknown;
+    let userDataDir = this.opts.userDataDir;
+    if (this.opts.profile) {
+      if (engine === "chrome") {
+        userDataDir = userDataDir ?? path.join(os.homedir(), ".navia", "profiles", `chrome-${this.opts.profile}`);
+      } else {
+        storageState = (await loadSession(this.opts.profile)) ?? undefined;
+        this.hooks.log?.(storageState ? `Perfil "${this.opts.profile}" cargado.` : `Perfil "${this.opts.profile}" no encontrado; arranco sin sesión.`);
+      }
+    }
+
     const driver = await BrowserDriver.create({
-      engine: this.opts.browser ?? "chromium",
+      engine,
       headless: this.opts.headless,
       slowMo: this.opts.slowMo,
       cdpPort: this.opts.cdpPort,
       cdpEndpoint: this.opts.cdpEndpoint,
-      userDataDir: this.opts.userDataDir,
+      userDataDir,
+      storageState,
     });
 
     try {
