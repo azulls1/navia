@@ -41,8 +41,20 @@
     "llm",
     "agent"
   ],
-  "author": "",
+  "author": "azulls1",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/azulls1/navia.git"
+  },
+  "bugs": {
+    "url": "https://github.com/azulls1/navia/issues"
+  },
+  "homepage": "https://github.com/azulls1/navia#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "engines": {
     "node": ">=20"
   },

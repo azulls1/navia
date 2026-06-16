@@ -1,0 +1,35 @@
+name: Release & Publish
+
+# Publica `navia-ai` en npm cuando publicas un Release en GitHub.
+# Usa Trusted Publishing (OIDC): NO necesita NPM_TOKEN.
+# Requisito (una sola vez): en npmjs.com → paquete navia-ai → Settings → Publishing access
+#   → "Trusted Publisher" → GitHub Actions, repo azulls1/navia, workflow release.yml.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # necesario para Trusted Publishing (OIDC) + provenance
+
+jobs:
+  publish:
+    name: Publicar en npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # npm >= 11.5.1 soporta Trusted Publishing (OIDC).
+      - name: Actualizar npm
+        run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Publicar (provenance + OIDC, sin token)
+        run: npm publish
