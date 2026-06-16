@@ -117,6 +117,16 @@ navia run "..." --provider claude-cli --cli-command ant    # recomendado: Anthro
 
 > Nota: el modo CLI hace un proceso por paso → más lento que `--provider api`, pero no requiere key.
 
+## 🔁 Macros deterministas (grabar y reproducir, sin IA)
+
+Graba una corrida y reprodúcela cuantas veces quieras **sin LLM ni API key** (rápido y gratis). El replay usa **localizadores estables** (rol + nombre), no refs efímeros:
+
+```bash
+navia "inicia sesión y descarga la factura del mes" --record ./factura.jsonl   # graba
+navia replay ./factura.jsonl --profile mi-portal                                # reproduce, sin IA
+```
+Ideal para flujos repetitivos ya validados. Los secretos no se guardan en la macro: `fill_credential`/`fill_totp` se reinyectan frescos desde el vault en cada replay.
+
 ## 🧑‍💻 Uso (librería)
 
 ```ts

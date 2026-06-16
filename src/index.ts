@@ -18,3 +18,5 @@ export type { AgentHooks } from "./agent/tools.js";
 export { BrowserDriver } from "./browser/driver.js";
 export type { BrowserEngine, LaunchOptions } from "./browser/launch.js";
 export { buildSystemPrompt } from "./agent/system-prompt.js";
+export { replayMacro } from "./agent/replay.js";
+export type { ReplayResult } from "./agent/replay.js";

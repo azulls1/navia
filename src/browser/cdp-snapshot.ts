@@ -67,6 +67,8 @@ export interface ParsedSnapshot {
   text: string;
   /** refs válidos en este snapshot (cada ref ES un backendDOMNodeId en texto). */
   refs: Set<string>;
+  /** ref → {role, name} para reproducir acciones por localizador estable (action-caching). */
+  descriptors: Map<string, { role: string; name: string }>;
 }
 
 export function parseAxTree(nodes: AXNode[], refPrefix = ""): ParsedSnapshot {
@@ -81,6 +83,7 @@ export function parseAxTree(nodes: AXNode[], refPrefix = ""): ParsedSnapshot {
 
   const lines: string[] = [];
   const refs = new Set<string>();
+  const descriptors = new Map<string, { role: string; name: string }>();
 
   const walk = (id: string, depth: number): void => {
     const n = byId.get(id);
@@ -96,6 +99,7 @@ export function parseAxTree(nodes: AXNode[], refPrefix = ""): ParsedSnapshot {
       if (interactive) {
         const ref = `${refPrefix}${n.backendDOMNodeId}`;
         refs.add(ref);
+        descriptors.set(ref, { role, name });
         const flags: string[] = [];
         if (prop(n, "checked") === true || prop(n, "checked") === "true") flags.push("checked");
         if (prop(n, "disabled") === true) flags.push("disabled");
@@ -116,5 +120,5 @@ export function parseAxTree(nodes: AXNode[], refPrefix = ""): ParsedSnapshot {
 
   for (const r of roots) walk(r.nodeId, 0);
 
-  return { text: lines.length ? lines.join("\n") : "(sin elementos interactivos visibles)", refs };
+  return { text: lines.length ? lines.join("\n") : "(sin elementos interactivos visibles)", refs, descriptors };
 }

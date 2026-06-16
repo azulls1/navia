@@ -204,6 +204,8 @@ export class BrowserAgent {
         // Ejecuta todas las tools pedidas y arma los tool_result.
         const toolResults: Anthropic.ToolResultBlockParam[] = [];
         for (const tu of toolUses) {
+          const refForLoc = (tu.input as any)?.ref;
+          const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
           try {
             const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks);
             const content: Anthropic.ToolResultBlockParam["content"] = [];
@@ -219,6 +221,7 @@ export class BrowserAgent {
               type: "action",
               tool: tu.name,
               input: tu.input,
+              locator: locator ?? undefined,
               ok: true,
               result: preview(out.text ?? (out.imageBase64 ? "[screenshot]" : "")),
             });
@@ -229,7 +232,7 @@ export class BrowserAgent {
               content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
               is_error: true,
             });
-            await recorder.log({ step: steps, type: "action", tool: tu.name, input: tu.input, ok: false, error: (err as Error).message });
+            await recorder.log({ step: steps, type: "action", tool: tu.name, input: tu.input, locator: locator ?? undefined, ok: false, error: (err as Error).message });
           }
         }
         messages.push({ role: "user", content: toolResults });

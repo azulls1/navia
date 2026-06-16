@@ -122,15 +122,16 @@ o, si la tarea ya está completa o no puedes continuar:
       }
 
       hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
+      const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
       try {
         const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks);
         const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
         transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
         transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
-        await recorder.log({ step, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, ok: true, result: preview(obs) });
+        await recorder.log({ step, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: true, result: preview(obs) });
       } catch (e) {
         transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
-        await recorder.log({ step, type: "action", tool: action.tool, input: action.args ?? {}, ok: false, error: (e as Error).message });
+        await recorder.log({ step, type: "action", tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: false, error: (e as Error).message });
       }
       pruneTranscript(transcript);
     }

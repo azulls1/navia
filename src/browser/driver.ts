@@ -34,6 +34,8 @@ export class BrowserDriver {
   private downloads: string[] = [];
   /** Sesiones CDP por iframe cross-origin (OOPIF), por ordinal del último snapshot. */
   private frameSessions = new Map<number, CDPSession>();
+  /** ref → {role, name} del último snapshot, para grabar macros (action-caching). */
+  private refDescriptors = new Map<string, { role: string; name: string }>();
   page!: Page;
 
   static async create(opts: LaunchOptions): Promise<BrowserDriver> {
@@ -139,6 +141,7 @@ export class BrowserDriver {
         const { nodes } = (await cdp.send("Accessibility.getFullAXTree", {} as any)) as unknown as { nodes: AXNode[] };
         const parsed = parseAxTree(nodes);
         this.refMode = "cdp";
+        this.refDescriptors = new Map(parsed.descriptors);
         const title = await this.page.title().catch(() => "");
         const frameText = await this.snapshotChildFrames();
         return `Página: ${title}\nURL: ${this.page.url()}\n${parsed.text}${frameText}`;
@@ -179,6 +182,7 @@ export class BrowserDriver {
         try {
           const { nodes } = (await this.cdp!.send("Accessibility.getFullAXTree", { frameId: f.id } as any)) as unknown as { nodes: AXNode[] };
           const parsed = parseAxTree(nodes);
+          for (const [k, v] of parsed.descriptors) this.refDescriptors.set(k, v);
           if (parsed.refs.size > 0) out += `\n[iframe: ${f.url || "(?)"}]\n${parsed.text}`;
         } catch {
           /* OOPIF u otro proceso → lo intenta (2) */
@@ -208,6 +212,7 @@ export class BrowserDriver {
         const { nodes } = (await fs.send("Accessibility.getFullAXTree", {} as any)) as unknown as { nodes: AXNode[] };
         this.frameSessions.set(ordinal, fs);
         const parsed = parseAxTree(nodes, `f${ordinal}_`);
+        for (const [k, v] of parsed.descriptors) this.refDescriptors.set(k, v);
         out += `\n[iframe ${ordinal} (cross-origin): ${url}]\n${parsed.text}`;
       } catch {
         out += `\n[iframe ${ordinal} (cross-origin): ${url}] (no se pudo leer)`;
@@ -242,6 +247,17 @@ export class BrowserDriver {
   /** storageState (cookies + localStorage) del contexto actual, para guardar un perfil. */
   async getStorageState(): Promise<unknown> {
     return this.session.context.storageState();
+  }
+
+  /** Descriptor estable (rol + nombre accesible) de un ref del último snapshot, para macros. */
+  describeRef(ref: string): { role: string; name: string } | null {
+    return this.refDescriptors.get(ref) ?? null;
+  }
+
+  /** Resuelve un localizador estable {role, name} a un Locator de Playwright (para replay). */
+  locateByRole(role: string, name?: string) {
+    const r = role as Parameters<Page["getByRole"]>[0];
+    return name ? this.page.getByRole(r, { name, exact: false }).first() : this.page.getByRole(r).first();
   }
 
   async click(ref: string): Promise<void> {

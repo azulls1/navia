@@ -128,6 +128,29 @@ browserOpt(
   return runTask(task, flags);
 });
 
+// `navia replay <archivo>` — re-ejecuta una macro grabada con --record, sin LLM.
+program
+  .command("replay <archivo>")
+  .description("Re-ejecutar una macro (JSONL de --record) de forma determinista, SIN IA ni API key.")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-p, --profile <name>", "perfil guardado con 'navia login'")
+  .option("--headless", "ejecutar sin ventana visible")
+  .action(async (archivo: string, opts: { browser: BrowserEngine; profile?: string; headless?: boolean }) => {
+    const { replayMacro } = await import("./agent/replay.js");
+    console.log(pc.cyan(`\n🔁 Navia replay — ${archivo}\n`));
+    try {
+      const r = await replayMacro(archivo, { task: "", browser: opts.browser, profile: opts.profile, headless: opts.headless }, (m) =>
+        console.log(pc.dim(m)),
+      );
+      console.log(
+        (r.failed === 0 ? pc.green("\n✓") : pc.yellow("\n•")) + ` Replay: ${r.ran}/${r.total} acciones OK` + (r.failed ? `, ${r.failed} fallaron` : ""),
+      );
+    } catch (err) {
+      console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
 // `navia doctor` — verifica que el entorno esté listo.
 function cmdExists(bin: string): Promise<boolean> {
   return new Promise(async (resolve) => {
