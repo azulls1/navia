@@ -110,6 +110,33 @@ export class BrowserDriver {
     return this.page.url();
   }
 
+  /**
+   * Detección barata (title/url/iframes) de muros anti-bot/captcha. Devuelve el nombre
+   * del reto o null. Permite delegar al humano ANTES de gastar pasos del LLM peleando
+   * contra el muro. (La detección completa por iframe llegará con el snapshot CDP, Fase 1.)
+   */
+  async detectChallenge(): Promise<string | null> {
+    try {
+      const url = this.page.url().toLowerCase();
+      const title = (await this.page.title().catch(() => "")).toLowerCase();
+      if (title.includes("just a moment") || title.includes("checking your browser") || title.includes("attention required"))
+        return "Cloudflare";
+      if (url.includes("challenges.cloudflare.com") || url.includes("/cdn-cgi/challenge")) return "Cloudflare";
+      const frames = (
+        (await this.page
+          .evaluate(() => Array.from(document.querySelectorAll("iframe")).map((f) => (f as HTMLIFrameElement).src || "").join(" "))
+          .catch(() => "")) as string
+      ).toLowerCase();
+      if (frames.includes("turnstile") || frames.includes("challenges.cloudflare.com")) return "Cloudflare Turnstile";
+      if (frames.includes("hcaptcha.com")) return "hCaptcha";
+      if (frames.includes("recaptcha")) return "reCAPTCHA";
+      if (frames.includes("captcha-delivery.com")) return "DataDome";
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async navigateBack(): Promise<void> {
     await this.page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
   }

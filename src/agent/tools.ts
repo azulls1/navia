@@ -149,6 +149,22 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
 ];
 
+/**
+ * Ejecuta una acción basada en ref; si falla (ref caduco/efímero o elemento ausente),
+ * re-lee la página y devuelve un snapshot fresco para que el siguiente turno reintente
+ * con refs vigentes — recuperación sin escalar a un error genérico.
+ */
+async function wrapAction(driver: BrowserDriver, fn: () => Promise<string>): Promise<{ text: string }> {
+  try {
+    return { text: await fn() };
+  } catch (e) {
+    const snap = await driver.snapshot().catch(() => "(no se pudo releer la página)");
+    return {
+      text: `⚠️ La acción falló: ${(e as Error).message}\nLos refs son efímeros y pudieron cambiar. Snapshot actualizado, reintenta con los nuevos refs:\n${snap}`,
+    };
+  }
+}
+
 /** Ejecuta una tool y devuelve el resultado (texto o bloques con imagen). */
 export async function dispatchTool(
   name: string,
@@ -158,25 +174,41 @@ export async function dispatchTool(
 ): Promise<{ text?: string; imageBase64?: string }> {
   hooks.log?.(`→ ${name} ${JSON.stringify(input).slice(0, 160)}`);
   switch (name) {
-    case "navigate":
+    case "navigate": {
       await driver.navigate(input.url);
-      return { text: `Navegado a ${input.url}. Llama a snapshot para leer la página.` };
-    case "snapshot":
-      return { text: await driver.snapshot() };
+      const ch = await driver.detectChallenge();
+      const warn = ch
+        ? `\n⚠️ Posible muro anti-bot/captcha detectado (${ch}). Llama a wait_for_human para que la persona lo resuelva en la ventana ANTES de continuar.`
+        : "";
+      return { text: `Navegado a ${input.url}. Llama a snapshot para leer la página.${warn}` };
+    }
+    case "snapshot": {
+      const snap = await driver.snapshot();
+      const ch = await driver.detectChallenge();
+      return { text: (ch ? `⚠️ Muro anti-bot/captcha detectado (${ch}). Considera wait_for_human.\n\n` : "") + snap };
+    }
     case "screenshot":
       return { imageBase64: await driver.screenshot() };
     case "click":
-      await driver.click(input.ref);
-      return { text: `Clic en ${input.ref}. Haz snapshot para ver el resultado.` };
+      return wrapAction(driver, async () => {
+        await driver.click(input.ref);
+        return `Clic en ${input.ref}. Haz snapshot para ver el resultado.`;
+      });
     case "type":
-      await driver.type(input.ref, input.text, { submit: input.submit, slowly: input.slowly });
-      return { text: `Escrito en ${input.ref}.` };
+      return wrapAction(driver, async () => {
+        await driver.type(input.ref, input.text, { submit: input.submit, slowly: input.slowly });
+        return `Escrito en ${input.ref}.`;
+      });
     case "fill_form":
-      await driver.fillForm(input.fields as FillField[]);
-      return { text: `Llenados ${input.fields.length} campos.` };
+      return wrapAction(driver, async () => {
+        await driver.fillForm(input.fields as FillField[]);
+        return `Llenados ${input.fields.length} campos.`;
+      });
     case "select_option":
-      await driver.selectOption(input.ref, input.values);
-      return { text: `Seleccionado en ${input.ref}.` };
+      return wrapAction(driver, async () => {
+        await driver.selectOption(input.ref, input.values);
+        return `Seleccionado en ${input.ref}.`;
+      });
     case "press_key":
       await driver.pressKey(input.key);
       return { text: `Tecla ${input.key} pulsada.` };

@@ -46,6 +46,34 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
  * breakpoints estáticos de system y tools, cachea el prefijo creciente de la conversación
  * → ~70-90% menos de coste/latencia de input en cada turno.
  */
+/**
+ * Poda snapshots y screenshots viejos del historial (deja solo los `keep` más recientes,
+ * reemplazando los demás por un placeholder). Evita que el contexto/coste crezca sin
+ * límite manteniendo el contenido reciente —lo único accionable— intacto.
+ */
+function pruneHistory(messages: Anthropic.MessageParam[], keep = 2): void {
+  const snapshots: any[] = [];
+  const images: any[] = [];
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue;
+    for (const block of m.content as any[]) {
+      if (block.type !== "tool_result" || !Array.isArray(block.content)) continue;
+      for (const inner of block.content) {
+        if (inner.type === "text" && typeof inner.text === "string" && inner.text.startsWith("Página:")) snapshots.push(inner);
+        if (inner.type === "image") images.push(inner);
+      }
+    }
+  }
+  for (const b of snapshots.slice(0, Math.max(0, snapshots.length - keep))) {
+    b.text = "[snapshot anterior elidido para ahorrar contexto — vuelve a hacer snapshot si lo necesitas]";
+  }
+  for (const b of images.slice(0, Math.max(0, images.length - keep))) {
+    b.type = "text";
+    b.text = "[screenshot anterior elidido para ahorrar contexto]";
+    delete b.source;
+  }
+}
+
 function setCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
   for (const m of messages) {
     if (Array.isArray(m.content)) for (const b of m.content as any[]) delete b.cache_control;
@@ -65,7 +93,8 @@ export class BrowserAgent {
     this.opts = opts;
     const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("Falta ANTHROPIC_API_KEY (pásala en opts.apiKey o como variable de entorno).");
-    this.client = new Anthropic({ apiKey });
+    // maxRetries cubre errores transitorios de la API (429/5xx) con backoff automático.
+    this.client = new Anthropic({ apiKey, maxRetries: 4 });
     this.hooks = {
       confirmAction: opts.hooks?.confirmAction ?? (async () => false),
       waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
@@ -107,6 +136,7 @@ export class BrowserAgent {
       let steps = 0;
       while (steps < maxSteps) {
         steps++;
+        pruneHistory(messages);
         setCacheBreakpoint(messages);
         const response = await this.client.messages.create({
           model,
