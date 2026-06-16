@@ -37,6 +37,8 @@ export interface BrowserSession {
   context: BrowserContext;
   /** true si nos conectamos a un navegador externo (no cerrarlo al terminar). */
   attached: boolean;
+  /** true si NOSOTROS creamos el contexto (entonces sí podemos cerrarlo sin afectar al usuario). */
+  ownsContext: boolean;
 }
 
 /** Rutas típicas de Chrome por sistema operativo. */
@@ -97,8 +99,10 @@ async function connectChromeCdp(opts: LaunchOptions): Promise<BrowserSession> {
   }
 
   const browser = await chromium.connectOverCDP(endpoint);
-  const context = browser.contexts()[0] ?? (await browser.newContext());
-  return { browser, context, attached: true };
+  const existing = browser.contexts()[0];
+  const context = existing ?? (await browser.newContext());
+  // Solo somos dueños del contexto si lo creamos nosotros (no había ninguno).
+  return { browser, context, attached: true, ownsContext: !existing };
 }
 
 export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession> {
@@ -106,21 +110,37 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
     return connectChromeCdp(opts);
   }
 
-  const launcher = opts.engine === "firefox" ? firefox : chromium;
-  const browser = await launcher.launch({
-    headless: opts.headless ?? false,
-    slowMo: opts.slowMo ?? 0,
-  });
+  // Endurecimiento básico anti-bot (señales JS clásicas). NO elimina el leak de
+  // Runtime.enable (eso requiere snapshot CDP / Patchright; ver roadmap), pero quita
+  // las banderas de automatización más baratas de detectar.
+  const browser =
+    opts.engine === "firefox"
+      ? await firefox.launch({
+          headless: opts.headless ?? false,
+          slowMo: opts.slowMo ?? 0,
+          firefoxUserPrefs: {
+            "dom.webdriver.enabled": false,
+            "useAutomationExtension": false,
+          },
+        })
+      : await chromium.launch({
+          headless: opts.headless ?? false,
+          slowMo: opts.slowMo ?? 0,
+          args: ["--disable-blink-features=AutomationControlled"],
+          ignoreDefaultArgs: ["--enable-automation"],
+        });
   const context = await browser.newContext({
     viewport: { width: 1366, height: 900 },
   });
-  return { browser, context, attached: false };
+  return { browser, context, attached: false, ownsContext: true };
 }
 
 export async function closeSession(session: BrowserSession): Promise<void> {
-  // Si nos conectamos a un Chrome externo, NO lo cerramos (es del usuario).
   if (session.attached) {
-    await session.browser?.close().catch(() => {});
+    // Conexión CDP a un Chrome del usuario: NUNCA cerramos el navegador (cerraría su
+    // Chrome real y destruiría su sesión/perfil). Solo cerramos el contexto si lo
+    // creamos nosotros; si reusamos el suyo, lo dejamos intacto y soltamos la conexión.
+    if (session.ownsContext) await session.context.close().catch(() => {});
     return;
   }
   await session.browser?.close().catch(() => {});

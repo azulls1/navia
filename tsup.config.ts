@@ -11,7 +11,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   shims: true,
-  banner: {
-    js: "#!/usr/bin/env node",
-  },
+  // El shebang vive como hashbang al inicio de src/cli.ts (esbuild lo preserva solo
+  // en ese entry). Así NO se cuela en dist/index.js, el entry de librería.
 });

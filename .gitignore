@@ -6,3 +6,10 @@ dist/
 .DS_Store
 chrome-profile/
 .navia/
+# Sesiones, perfiles y secretos — NUNCA commitear
+**/storageState*.json
+*.storageState.json
+profiles/
+trajectories/
+*.pem
+*.key

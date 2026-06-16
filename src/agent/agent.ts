@@ -40,6 +40,22 @@ export interface NaviaResult {
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 
+/**
+ * Pone un breakpoint de prompt caching rodante en el último bloque del último mensaje
+ * (quitando los previos para no exceder los 4 breakpoints de Anthropic). Junto con los
+ * breakpoints estáticos de system y tools, cachea el prefijo creciente de la conversación
+ * → ~70-90% menos de coste/latencia de input en cada turno.
+ */
+function setCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
+  for (const m of messages) {
+    if (Array.isArray(m.content)) for (const b of m.content as any[]) delete b.cache_control;
+  }
+  const last = messages[messages.length - 1];
+  if (last && Array.isArray(last.content) && last.content.length) {
+    (last.content[last.content.length - 1] as any).cache_control = { type: "ephemeral" };
+  }
+}
+
 export class BrowserAgent {
   private client: Anthropic;
   private opts: NaviaOptions;
@@ -73,6 +89,13 @@ export class BrowserAgent {
       const model = this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL;
       const maxSteps = this.opts.maxSteps ?? 60;
       const system = buildSystemPrompt(this.opts.systemExtra);
+      // Breakpoints de caché estáticos: system (constante) y el bloque de tools (constante).
+      const systemBlocks: Anthropic.TextBlockParam[] = [
+        { type: "text", text: system, cache_control: { type: "ephemeral" } },
+      ];
+      const cachedTools: Anthropic.Tool[] = TOOL_DEFINITIONS.map((t, i) =>
+        i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t,
+      );
 
       const messages: Anthropic.MessageParam[] = [
         {
@@ -84,11 +107,12 @@ export class BrowserAgent {
       let steps = 0;
       while (steps < maxSteps) {
         steps++;
+        setCacheBreakpoint(messages);
         const response = await this.client.messages.create({
           model,
           max_tokens: 4096,
-          system,
-          tools: TOOL_DEFINITIONS,
+          system: systemBlocks,
+          tools: cachedTools,
           messages,
         });
 
