@@ -11,6 +11,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { loadSession } from "../browser/session-store.js";
+import { createRecorder, preview } from "./trajectory.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -32,6 +33,8 @@ export interface NaviaOptions {
   provider?: "auto" | "api" | "claude-cli";
   /** Binario del CLI para provider claude-cli (default "claude"). */
   cliCommand?: string;
+  /** Registrar la corrida en JSONL: true (ruta por defecto) o una ruta de archivo. */
+  record?: boolean | string;
   /** Máximo de pasos (iteraciones de tool use) antes de cortar. Default 60. */
   maxSteps?: number;
   /** Instrucciones extra para el system prompt. */
@@ -142,6 +145,9 @@ export class BrowserAgent {
 
       const model = this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL;
       const maxSteps = this.opts.maxSteps ?? 60;
+      const recorder = createRecorder(this.opts.record);
+      if (recorder.path) this.hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
+      await recorder.log({ type: "start", task: this.opts.task, engine, model: this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL, provider: "api" });
       const system = buildSystemPrompt(this.opts.systemExtra);
       // Breakpoints de caché estáticos: system (constante) y el bloque de tools (constante).
       const systemBlocks: Anthropic.TextBlockParam[] = [
@@ -179,7 +185,10 @@ export class BrowserAgent {
 
         // Texto que va emitiendo la IA (pensamiento/avances).
         for (const block of response.content) {
-          if (block.type === "text" && block.text.trim()) this.hooks.log?.(`💬 ${block.text.trim()}`);
+          if (block.type === "text" && block.text.trim()) {
+            this.hooks.log?.(`💬 ${block.text.trim()}`);
+            await recorder.log({ step: steps, type: "thought", text: preview(block.text.trim()) });
+          }
         }
 
         if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
@@ -188,6 +197,7 @@ export class BrowserAgent {
             .map((b) => b.text)
             .join("\n")
             .trim();
+          await recorder.log({ step: steps, type: "done", summary: preview(finalText) });
           return { summary: finalText || "(sin resumen)", steps };
         }
 
@@ -204,6 +214,14 @@ export class BrowserAgent {
                 source: { type: "base64", media_type: "image/png", data: out.imageBase64 },
               });
             toolResults.push({ type: "tool_result", tool_use_id: tu.id, content });
+            await recorder.log({
+              step: steps,
+              type: "action",
+              tool: tu.name,
+              input: tu.input,
+              ok: true,
+              result: preview(out.text ?? (out.imageBase64 ? "[screenshot]" : "")),
+            });
           } catch (err) {
             toolResults.push({
               type: "tool_result",
@@ -211,11 +229,13 @@ export class BrowserAgent {
               content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
               is_error: true,
             });
+            await recorder.log({ step: steps, type: "action", tool: tu.name, input: tu.input, ok: false, error: (err as Error).message });
           }
         }
         messages.push({ role: "user", content: toolResults });
       }
 
+      await recorder.log({ type: "done", steps, summary: "max-steps" });
       return { summary: `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`, steps };
     } finally {
       await driver.close();

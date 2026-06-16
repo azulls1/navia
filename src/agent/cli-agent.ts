@@ -13,6 +13,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
 import { loadSession } from "../browser/session-store.js";
 import { cliComplete } from "../providers/cli-provider.js";
+import { createRecorder, preview } from "./trajectory.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
 
 function extractJson(s: string): any | null {
@@ -80,6 +81,9 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
 
     const transcript: string[] = [`TAREA: ${opts.task}`];
     const maxSteps = opts.maxSteps ?? 60;
+    const recorder = createRecorder(opts.record);
+    if (recorder.path) hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
+    await recorder.log({ type: "start", task: opts.task, engine, provider: "claude-cli" });
 
     for (let step = 1; step <= maxSteps; step++) {
       const prompt = `${system}
@@ -109,6 +113,7 @@ o, si la tarea ya está completa o no puedes continuar:
         continue;
       }
       if (action.done) {
+        await recorder.log({ step, type: "done", summary: preview(action.summary ?? "") });
         return { summary: action.summary ?? "(sin resumen)", steps: step };
       }
       if (!action.tool) {
@@ -122,8 +127,10 @@ o, si la tarea ya está completa o no puedes continuar:
         const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
         transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
         transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
+        await recorder.log({ step, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, ok: true, result: preview(obs) });
       } catch (e) {
         transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
+        await recorder.log({ step, type: "action", tool: action.tool, input: action.args ?? {}, ok: false, error: (e as Error).message });
       }
       pruneTranscript(transcript);
     }

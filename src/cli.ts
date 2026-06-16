@@ -44,6 +44,7 @@ interface RunFlags {
   profile?: string;
   provider?: "auto" | "api" | "claude-cli";
   cliCommand?: string;
+  record?: boolean | string;
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -72,6 +73,7 @@ async function runTask(task: string, flags: RunFlags) {
       profile: flags.profile,
       provider: flags.provider,
       cliCommand: flags.cliCommand,
+      record: flags.record,
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
@@ -109,6 +111,7 @@ const browserOpt = (cmd: Command) =>
     .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)")
     .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
+    .option("--record [path]", "registrar la corrida en JSONL (~/.navia/trajectories/ o la ruta dada)")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.
