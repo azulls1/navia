@@ -42,13 +42,31 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
-/** Mantiene el historial acotado: conserva la TAREA y las últimas entradas. */
-function pruneTranscript(transcript: string[], keepTail = 24): void {
-  if (transcript.length <= keepTail + 1) return;
-  const head = transcript[0];
-  const tail = transcript.slice(transcript.length - keepTail);
-  transcript.length = 0;
-  transcript.push(head, "(… historial antiguo elidido …)", ...tail);
+/**
+ * Mantiene el historial acotado y BARATO. Aprendizaje de los logs: con auto-snapshot cada
+ * observación trae la página completa → el prompt del CLI crece y se ralentiza. Solución:
+ * dejar SOLO la última observación en detalle y elidir las anteriores (la IA solo necesita
+ * el estado actual; el historial de acciones basta para el contexto). Además acota la cola.
+ */
+function pruneTranscript(transcript: string[], keepTail = 20): void {
+  let lastObs = -1;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    if (transcript[i].startsWith("OBSERVACIÓN:")) {
+      lastObs = i;
+      break;
+    }
+  }
+  for (let i = 0; i < transcript.length; i++) {
+    if (i !== lastObs && transcript[i].startsWith("OBSERVACIÓN:") && transcript[i].length > 200) {
+      transcript[i] = "OBSERVACIÓN: [elidida; usa snapshot si necesitas releer ese estado]";
+    }
+  }
+  if (transcript.length > keepTail + 1) {
+    const head = transcript[0];
+    const tail = transcript.slice(transcript.length - keepTail);
+    transcript.length = 0;
+    transcript.push(head, "(… historial antiguo elidido …)", ...tail);
+  }
 }
 
 export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<NaviaResult> {
