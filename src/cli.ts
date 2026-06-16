@@ -128,6 +128,73 @@ browserOpt(
   return runTask(task, flags);
 });
 
+// `navia doctor` — verifica que el entorno esté listo.
+function cmdExists(bin: string): Promise<boolean> {
+  return new Promise(async (resolve) => {
+    const { spawn } = await import("node:child_process");
+    try {
+      const child = spawn(bin, ["--version"], { shell: process.platform === "win32", stdio: "ignore" });
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve(false);
+      }, 5000);
+      child.on("error", () => {
+        clearTimeout(timer);
+        resolve(false);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        resolve(code === 0);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function safeExe(launcher: { executablePath: () => string }): Promise<string | null> {
+  const { existsSync } = await import("node:fs");
+  try {
+    const p = launcher.executablePath();
+    return p && existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+program
+  .command("doctor")
+  .description("Verifica que el entorno esté listo (Node, navegadores, motor de IA, secretos).")
+  .action(async () => {
+    const ok = (b: boolean) => (b ? pc.green("✓") : pc.red("✗"));
+    console.log(pc.cyan("\n🩺 Navia doctor\n"));
+
+    const major = Number(process.versions.node.split(".")[0]);
+    console.log(`${ok(major >= 20)} Node ${process.versions.node} ${major >= 20 ? "" : pc.dim("(requiere >=20)")}`);
+
+    const hasKey = !!process.env.ANTHROPIC_API_KEY;
+    const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
+    const engines = [hasKey ? "ANTHROPIC_API_KEY" : null, hasAnt ? "ant CLI" : null, hasClaude ? "claude CLI" : null].filter(Boolean);
+    console.log(
+      `${ok(engines.length > 0)} Motor de IA: ${engines.join(", ") || pc.dim("ninguno → pon ANTHROPIC_API_KEY, o instala 'claude'/'ant'")}`,
+    );
+
+    const { chromium, firefox } = await import("playwright");
+    const cPath = await safeExe(chromium);
+    const fPath = await safeExe(firefox);
+    console.log(`${ok(!!cPath)} Chromium de Playwright ${cPath ? "" : pc.dim("→ npx playwright install chromium")}`);
+    console.log(`${ok(!!fPath)} Firefox de Playwright ${fPath ? "" : pc.dim("→ npx playwright install firefox")}`);
+
+    console.log(
+      `${process.env.NAVIA_SECRET ? pc.green("✓") : pc.yellow("•")} NAVIA_SECRET ${
+        process.env.NAVIA_SECRET ? "definido (perfiles/vault cifrados)" : pc.dim("no definido (perfiles/vault en claro)")
+      }`,
+    );
+
+    const listo = major >= 20 && engines.length > 0 && !!cPath;
+    console.log(listo ? pc.green("\n✓ Listo para usar Navia.") : pc.yellow("\n• Faltan piezas arriba; revisa las pistas."));
+  });
+
 // `navia chrome` — solo lanzar Chrome real con depuración (para el truco anti-Cloudflare)
 program
   .command("chrome")
