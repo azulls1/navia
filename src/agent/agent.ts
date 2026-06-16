@@ -35,6 +35,8 @@ export interface NaviaOptions {
   cliCommand?: string;
   /** Registrar la corrida en JSONL: true (ruta por defecto) o una ruta de archivo. */
   record?: boolean | string;
+  /** Crear carpeta-bitácora (memoria) por tarea: true (auto: Obsidian/Escritorio) o una ruta base. */
+  workspace?: boolean | string;
   /** Máximo de pasos (iteraciones de tool use) antes de cortar. Default 60. */
   maxSteps?: number;
   /** Instrucciones extra para el system prompt. */

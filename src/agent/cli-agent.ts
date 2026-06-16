@@ -14,6 +14,7 @@ import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
 import { loadSession } from "../browser/session-store.js";
 import { cliComplete } from "../providers/cli-provider.js";
 import { createRecorder, preview } from "./trajectory.js";
+import { createWorkspace } from "./workspace.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
 
 function extractJson(s: string): any | null {
@@ -99,7 +100,16 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
 
     const transcript: string[] = [`TAREA: ${opts.task}`];
     const maxSteps = opts.maxSteps ?? 60;
-    const recorder = createRecorder(opts.record);
+
+    // Workspace = carpeta-bitácora (memoria) por tarea. Si se pide, la grabación va también allí.
+    let ws: Awaited<ReturnType<typeof createWorkspace>>["ws"] | undefined;
+    if (opts.workspace) {
+      const stamp = new Date().toISOString();
+      const created = await createWorkspace(opts.task, stamp, typeof opts.workspace === "string" ? { dir: opts.workspace } : undefined);
+      ws = created.ws;
+      hooks.log?.(`🧠 Workspace: ${ws.dir}  [${created.where}]`);
+    }
+    const recorder = createRecorder(opts.record, undefined, ws);
     if (recorder.path) hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
     await recorder.log({ type: "start", task: opts.task, engine, provider: "claude-cli" });
 
@@ -132,6 +142,7 @@ o, si la tarea ya está completa o no puedes continuar:
       }
       if (action.done) {
         await recorder.log({ step, type: "done", summary: preview(action.summary ?? "") });
+        await ws?.writeSummary(action.summary ?? "(sin resumen)");
         return { summary: action.summary ?? "(sin resumen)", steps: step };
       }
       if (!action.tool) {

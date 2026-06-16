@@ -46,6 +46,7 @@ interface RunFlags {
   cliCommand?: string;
   record?: boolean | string;
   yes?: boolean;
+  workspace?: boolean | string;
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -75,6 +76,7 @@ async function runTask(task: string, flags: RunFlags) {
       provider: flags.provider,
       cliCommand: flags.cliCommand,
       record: flags.record,
+      workspace: flags.workspace,
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
@@ -117,6 +119,7 @@ const browserOpt = (cmd: Command) =>
     .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
     .option("--record [path]", "registrar la corrida en JSONL (~/.navia/trajectories/ o la ruta dada)")
+    .option("--workspace [dir]", "crear carpeta-bitácora (memoria) por tarea (auto: Obsidian/Escritorio, o la ruta dada)")
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 

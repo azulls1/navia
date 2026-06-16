@@ -18,11 +18,24 @@
  *     Usa `ant` si puedes.
  */
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
+
+/**
+ * Una ÚNICA carpeta scratch por proceso para el modo `claude`. Antes se creaba y borraba
+ * en cada llamada, lo que en Windows provocaba EPERM (el `claude` hijo aún la tenía abierta)
+ * y cortaba la corrida. Ahora se crea una vez, se reutiliza, y el SO la limpia al salir.
+ */
+let scratchDir: string | null = null;
+function getScratch(): string {
+  if (scratchDir) return scratchDir;
+  scratchDir = mkdtempSync(join(tmpdir(), "navia-cli-"));
+  writeFileSync(join(scratchDir, "CLAUDE.md"), "Responde ÚNICAMENTE con el objeto JSON pedido. Nada de prosa ni explicación.\n");
+  return scratchDir;
+}
 
 export interface CliProviderOptions {
   /** Binario base (default "claude"). Pon "ant" para el modo recomendado. Ignorado si NAVIA_CLI_CMD. */
@@ -104,12 +117,10 @@ export async function cliComplete(prompt: string, opts?: CliProviderOptions): Pr
     return out.trim();
   }
 
-  // Modo 3: claude (Claude Code) — fallback. Lo corremos desde un cwd temporal para no
-  // arrastrar el CLAUDE.md/contexto del proyecto, que es lo que más lo desvía hacia prosa.
-  const scratch = mkdtempSync(join(tmpdir(), "navia-cli-"));
-  try {
-    // Sembramos un CLAUDE.md mínimo en el cwd neutro para reforzar "solo JSON".
-    writeFileSync(join(scratch, "CLAUDE.md"), "Responde ÚNICAMENTE con el objeto JSON pedido. Nada de prosa ni explicación.\n");
+  // Modo 3: claude (Claude Code) — fallback. Lo corremos desde un cwd temporal neutro
+  // (carpeta reutilizada) para no arrastrar el CLAUDE.md/contexto del proyecto.
+  const scratch = getScratch();
+  {
     const args = ["-p", "--output-format", "json"];
     const { out, err, code } = await run("claude", args, prompt, { timeoutMs: opts?.timeoutMs, cwd: scratch });
     if (code !== 0 && !out) throw new Error(`El CLI 'claude' salió con código ${code}: ${err.slice(0, 300)}`);
@@ -120,7 +131,5 @@ export async function cliComplete(prompt: string, opts?: CliProviderOptions): Pr
     } catch {
       return out.trim(); // cae a stdout crudo
     }
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
   }
 }

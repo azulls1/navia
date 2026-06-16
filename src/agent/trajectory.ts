@@ -16,23 +16,30 @@ export interface Recorder {
 
 const NOOP: Recorder = { path: null, async log() {} };
 
-export function createRecorder(record?: boolean | string, stamp?: string): Recorder {
-  if (!record) return NOOP;
+/** Sink opcional adicional (p.ej. el workspace/bitácora) que recibe cada entrada. */
+export type RecorderSink = { logStep(entry: Record<string, unknown>): Promise<void> };
+
+export function createRecorder(record?: boolean | string, stamp?: string, sink?: RecorderSink): Recorder {
+  if (!record && !sink) return NOOP;
   const ts = (stamp ?? new Date().toISOString()).replace(/[:.]/g, "-");
-  const file = typeof record === "string" ? record : path.join(os.homedir(), ".navia", "trajectories", `run-${ts}.jsonl`);
+  const file = typeof record === "string" ? record : record ? path.join(os.homedir(), ".navia", "trajectories", `run-${ts}.jsonl`) : null;
   let ensured = false;
   return {
     path: file,
     async log(entry) {
+      const stamped = { t: new Date().toISOString(), ...entry };
       try {
-        if (!ensured) {
-          await mkdir(path.dirname(file), { recursive: true });
-          ensured = true;
+        if (file) {
+          if (!ensured) {
+            await mkdir(path.dirname(file), { recursive: true });
+            ensured = true;
+          }
+          await appendFile(file, JSON.stringify(stamped) + "\n", "utf8");
         }
-        await appendFile(file, JSON.stringify({ t: new Date().toISOString(), ...entry }) + "\n", "utf8");
       } catch {
         /* el registro nunca debe romper la corrida */
       }
+      if (sink) await sink.logStep(entry).catch(() => {});
     },
   };
 }
