@@ -1,0 +1,204 @@
+/**
+ * Definición de herramientas (esquema para la API de Anthropic) + el dispatcher
+ * que ejecuta cada herramienta contra el BrowserDriver.
+ */
+import type Anthropic from "@anthropic-ai/sdk";
+import type { BrowserDriver, FillField } from "../browser/driver.js";
+
+export interface AgentHooks {
+  /** Pedir confirmación humana para una acción irreversible. Devuelve true si se aprueba. */
+  confirmAction: (description: string) => Promise<boolean>;
+  /** Pausar para que el humano resuelva algo en la ventana (login/captcha). Devuelve nota opcional. */
+  waitForHuman: (reason: string) => Promise<string>;
+  /** Log de progreso. */
+  log?: (msg: string) => void;
+}
+
+export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
+  {
+    name: "navigate",
+    description: "Ir a una URL en el navegador.",
+    input_schema: {
+      type: "object",
+      properties: { url: { type: "string", description: "URL completa (https://...)" } },
+      required: ["url"],
+    },
+  },
+  {
+    name: "snapshot",
+    description:
+      "Leer la estructura de la página actual (árbol de accesibilidad con refs). Úsalo antes de actuar y para verificar.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "screenshot",
+    description: "Tomar una captura de imagen de la página para verla con visión.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "click",
+    description: "Hacer clic en un elemento por su ref (obtenido del snapshot).",
+    input_schema: {
+      type: "object",
+      properties: { ref: { type: "string", description: "ref del elemento, ej. e12" } },
+      required: ["ref"],
+    },
+  },
+  {
+    name: "type",
+    description: "Escribir texto en un campo por su ref.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        text: { type: "string" },
+        submit: { type: "boolean", description: "Pulsar Enter al terminar" },
+        slowly: { type: "boolean", description: "Teclear despacio para disparar autocompletados" },
+      },
+      required: ["ref", "text"],
+    },
+  },
+  {
+    name: "fill_form",
+    description: "Llenar varios campos de golpe.",
+    input_schema: {
+      type: "object",
+      properties: {
+        fields: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              ref: { type: "string" },
+              value: { type: "string" },
+              type: { type: "string", enum: ["text", "checkbox", "radio", "combobox"] },
+            },
+            required: ["ref", "value"],
+          },
+        },
+      },
+      required: ["fields"],
+    },
+  },
+  {
+    name: "select_option",
+    description: "Elegir una o varias opciones de un <select> nativo por su ref.",
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        values: { type: "array", items: { type: "string" } },
+      },
+      required: ["ref", "values"],
+    },
+  },
+  {
+    name: "press_key",
+    description: "Pulsar una tecla (Enter, Escape, Tab, ArrowDown…).",
+    input_schema: {
+      type: "object",
+      properties: { key: { type: "string" } },
+      required: ["key"],
+    },
+  },
+  {
+    name: "evaluate",
+    description:
+      "Ejecutar JavaScript en la página y devolver un valor. Úsalo para extraer listados (querySelectorAll → JSON) o clics tercos. El código es el cuerpo de una función; usa 'return'.",
+    input_schema: {
+      type: "object",
+      properties: { code: { type: "string", description: "Cuerpo JS, ej: return [...document.querySelectorAll('a')].map(a=>a.href)" } },
+      required: ["code"],
+    },
+  },
+  {
+    name: "wait_for",
+    description: "Esperar a que aparezca/desaparezca un texto, o un tiempo fijo (útil para anti-bot / carga).",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Texto que debe aparecer" },
+        text_gone: { type: "string", description: "Texto que debe desaparecer" },
+        time_ms: { type: "number", description: "Milisegundos a esperar" },
+      },
+    },
+  },
+  {
+    name: "navigate_back",
+    description: "Volver a la página anterior.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "confirm_action",
+    description:
+      "Pedir confirmación humana ANTES de una acción irreversible (enviar, pagar, borrar, postularse, publicar). Obligatorio antes de ejecutarlas.",
+    input_schema: {
+      type: "object",
+      properties: { description: { type: "string", description: "Qué acción se va a hacer" } },
+      required: ["description"],
+    },
+  },
+  {
+    name: "wait_for_human",
+    description: "Pausar para que la persona resuelva algo en la ventana (login, captcha, 2FA, dato personal).",
+    input_schema: {
+      type: "object",
+      properties: { reason: { type: "string", description: "Qué necesita hacer la persona" } },
+      required: ["reason"],
+    },
+  },
+];
+
+/** Ejecuta una tool y devuelve el resultado (texto o bloques con imagen). */
+export async function dispatchTool(
+  name: string,
+  input: Record<string, any>,
+  driver: BrowserDriver,
+  hooks: AgentHooks,
+): Promise<{ text?: string; imageBase64?: string }> {
+  hooks.log?.(`→ ${name} ${JSON.stringify(input).slice(0, 160)}`);
+  switch (name) {
+    case "navigate":
+      await driver.navigate(input.url);
+      return { text: `Navegado a ${input.url}. Llama a snapshot para leer la página.` };
+    case "snapshot":
+      return { text: await driver.snapshot() };
+    case "screenshot":
+      return { imageBase64: await driver.screenshot() };
+    case "click":
+      await driver.click(input.ref);
+      return { text: `Clic en ${input.ref}. Haz snapshot para ver el resultado.` };
+    case "type":
+      await driver.type(input.ref, input.text, { submit: input.submit, slowly: input.slowly });
+      return { text: `Escrito en ${input.ref}.` };
+    case "fill_form":
+      await driver.fillForm(input.fields as FillField[]);
+      return { text: `Llenados ${input.fields.length} campos.` };
+    case "select_option":
+      await driver.selectOption(input.ref, input.values);
+      return { text: `Seleccionado en ${input.ref}.` };
+    case "press_key":
+      await driver.pressKey(input.key);
+      return { text: `Tecla ${input.key} pulsada.` };
+    case "evaluate": {
+      const result = await driver.evaluate(input.code);
+      return { text: `Resultado:\n${JSON.stringify(result, null, 2).slice(0, 6000)}` };
+    }
+    case "wait_for":
+      await driver.waitFor({ text: input.text, textGone: input.text_gone, timeMs: input.time_ms });
+      return { text: "Espera completada." };
+    case "navigate_back":
+      await driver.navigateBack();
+      return { text: "Volviste a la página anterior." };
+    case "confirm_action": {
+      const ok = await hooks.confirmAction(input.description);
+      return { text: ok ? "APROBADO por el humano. Puedes proceder." : "RECHAZADO por el humano. No lo hagas; busca otra opción o termina." };
+    }
+    case "wait_for_human": {
+      const note = await hooks.waitForHuman(input.reason);
+      return { text: `El humano terminó. ${note ? `Nota: ${note}` : ""} Continúa con un snapshot.` };
+    }
+    default:
+      return { text: `Herramienta desconocida: ${name}` };
+  }
+}
