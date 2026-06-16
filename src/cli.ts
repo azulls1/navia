@@ -118,7 +118,7 @@ const browserOpt = (cmd: Command) =>
     .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)")
     .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
-    .option("--record [path]", "registrar la corrida en JSONL (~/.navia/trajectories/ o la ruta dada)")
+    .option("--record [path]", "registrar la corrida en JSONL (default ~/.navia/trajectories/; o una ruta. Tip: usa --workspace para bitácora completa)")
     .option("--workspace [dir]", "crear carpeta-bitácora (memoria) por tarea (auto: Obsidian/Escritorio, o la ruta dada)")
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
