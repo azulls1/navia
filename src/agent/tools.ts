@@ -157,6 +157,36 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "upload_file",
+    description: 'Subir archivo(s) a un <input type="file"> por su ref (para adjuntar CV, documentos, etc.).',
+    input_schema: {
+      type: "object",
+      properties: {
+        ref: { type: "string" },
+        paths: { type: "array", items: { type: "string" }, description: "rutas absolutas de los archivos a subir" },
+      },
+      required: ["ref", "paths"],
+    },
+  },
+  {
+    name: "list_downloads",
+    description: "Listar los archivos descargados en esta sesión (rutas en ~/.navia/downloads).",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "tabs",
+    description: "Gestionar pestañas: listar, abrir nueva, seleccionar o cerrar.",
+    input_schema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "new", "select", "close"] },
+        index: { type: "number", description: "índice de la pestaña (para select/close)" },
+        url: { type: "string", description: "URL al abrir una pestaña nueva (opcional)" },
+      },
+      required: ["action"],
+    },
+  },
+  {
     name: "confirm_action",
     description:
       "Pedir confirmación humana ANTES de una acción irreversible (enviar, pagar, borrar, postularse, publicar). Obligatorio antes de ejecutarlas.",
@@ -270,6 +300,32 @@ export async function dispatchTool(
     case "navigate_back":
       await driver.navigateBack();
       return { text: "Volviste a la página anterior." };
+    case "upload_file":
+      return wrapAction(driver, async () => {
+        await driver.uploadFile(input.ref, input.paths as string[]);
+        return `Subidos ${input.paths.length} archivo(s) a ${input.ref}.`;
+      });
+    case "list_downloads": {
+      const d = driver.listDownloads();
+      return { text: d.length ? `Descargas:\n${d.join("\n")}` : "Sin descargas todavía." };
+    }
+    case "tabs": {
+      switch (input.action) {
+        case "list":
+          return { text: await driver.listTabs() };
+        case "new":
+          await driver.newTab(input.url);
+          return { text: `Nueva pestaña abierta${input.url ? ` en ${input.url}` : ""}. Haz snapshot para leerla.` };
+        case "select":
+          await driver.selectTab(input.index);
+          return { text: `Pestaña ${input.index} seleccionada. Haz snapshot.` };
+        case "close":
+          await driver.closeTab(input.index);
+          return { text: `Pestaña ${input.index} cerrada.` };
+        default:
+          return { text: "acción inválida para 'tabs' (usa list|new|select|close)" };
+      }
+    }
     case "confirm_action": {
       const ok = await hooks.confirmAction(input.description);
       return { text: ok ? "APROBADO por el humano. Puedes proceder." : "RECHAZADO por el humano. No lo hagas; busca otra opción o termina." };

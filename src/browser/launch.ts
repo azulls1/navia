@@ -134,6 +134,7 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
   const context = await browser.newContext({
     viewport: { width: 1366, height: 900 },
     storageState: (opts.storageState as any) ?? undefined,
+    acceptDownloads: true,
   });
   return { browser, context, attached: false, ownsContext: true };
 }

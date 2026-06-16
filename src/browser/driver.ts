@@ -9,6 +9,9 @@
  */
 import type { Page, CDPSession } from "playwright";
 import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { takeSnapshot, REF_ATTR } from "./snapshot.js";
 import { parseAxTree, type AXNode } from "./cdp-snapshot.js";
 import { launchBrowser, closeSession, type BrowserSession, type LaunchOptions, type BrowserEngine } from "./launch.js";
@@ -27,6 +30,8 @@ export class BrowserDriver {
   private refMode: "cdp" | "legacy" = "legacy";
   /** Firma del último estado observado (url + hash del snapshot), para change-observation. */
   private lastSig: string | null = null;
+  /** Rutas de archivos descargados durante la sesión. */
+  private downloads: string[] = [];
   page!: Page;
 
   static async create(opts: LaunchOptions): Promise<BrowserDriver> {
@@ -35,7 +40,32 @@ export class BrowserDriver {
     driver.engine = opts.engine;
     const ctx = driver.session.context;
     driver.page = ctx.pages()[0] ?? (await ctx.newPage());
+    // Captura descargas de cualquier pestaña (actual o nueva).
+    ctx.on("page", (p) => driver.attachPage(p));
+    driver.attachPage(driver.page);
     return driver;
+  }
+
+  /** Engancha el guardado automático de descargas en una pestaña. */
+  private attachPage(page: Page): void {
+    page.on("download", async (d) => {
+      try {
+        const dir = path.join(os.homedir(), ".navia", "downloads");
+        await mkdir(dir, { recursive: true });
+        const fp = path.join(dir, d.suggestedFilename());
+        await d.saveAs(fp);
+        this.downloads.push(fp);
+      } catch {
+        /* noop */
+      }
+    });
+  }
+
+  /** Cambia el contexto CDP/refs al cambiar de pestaña. */
+  private resetForNewPage(): void {
+    this.cdp = undefined;
+    this.refMode = "legacy";
+    this.lastSig = null;
   }
 
   /** Crea (una vez) la sesión CDP si el motor la soporta. Firefox → null. */
@@ -268,6 +298,54 @@ export class BrowserDriver {
 
   async navigateBack(): Promise<void> {
     await this.page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
+  }
+
+  /** Sube archivos a un <input type="file"> por su ref. */
+  async uploadFile(ref: string, paths: string[]): Promise<void> {
+    if (this.refMode === "cdp" && this.cdp) {
+      await this.cdp.send("DOM.setFileInputFiles", { files: paths, backendNodeId: Number(ref) } as any);
+      return;
+    }
+    await this.legacyLocator(ref).setInputFiles(paths);
+  }
+
+  /** Archivos descargados hasta ahora (rutas absolutas en ~/.navia/downloads). */
+  listDownloads(): string[] {
+    return [...this.downloads];
+  }
+
+  async listTabs(): Promise<string> {
+    const pages = this.session.context.pages();
+    const lines = await Promise.all(
+      pages.map(async (p, i) => `${p === this.page ? "*" : " "} [${i}] ${(await p.title().catch(() => "")) || "(sin título)"} — ${p.url()}`),
+    );
+    return "Pestañas (* = actual):\n" + lines.join("\n");
+  }
+
+  async selectTab(index: number): Promise<void> {
+    const pages = this.session.context.pages();
+    if (!pages[index]) throw new Error(`No existe la pestaña ${index}`);
+    this.page = pages[index];
+    await this.page.bringToFront().catch(() => {});
+    this.resetForNewPage();
+  }
+
+  async newTab(url?: string): Promise<void> {
+    // El listener de descargas se engancha solo vía ctx.on("page").
+    this.page = await this.session.context.newPage();
+    this.resetForNewPage();
+    if (url) await this.navigate(url);
+  }
+
+  async closeTab(index: number): Promise<void> {
+    const pages = this.session.context.pages();
+    if (!pages[index]) throw new Error(`No existe la pestaña ${index}`);
+    const closing = pages[index];
+    await closing.close().catch(() => {});
+    if (closing === this.page) {
+      this.page = this.session.context.pages()[0];
+      this.resetForNewPage();
+    }
   }
 
   async close(): Promise<void> {

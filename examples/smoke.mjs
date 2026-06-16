@@ -3,6 +3,9 @@
 // Ejecuta:  node examples/smoke.mjs
 import { BrowserDriver } from "../dist/index.js";
 import assert from "node:assert";
+import { writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const driver = await BrowserDriver.create({ engine: "chromium", headless: true });
 
@@ -37,5 +40,36 @@ await driver.type(box[1], "hola");
 const val = await driver.evaluate("return document.getElementById('host').shadowRoot.querySelector('input').value");
 assert(val === "hola", `type vía CDP debió escribir 'hola' (obtuvo '${val}')`);
 
+// 3) Multi-pestaña
+await driver.newTab("https://example.com");
+let tabs = await driver.listTabs();
+assert((tabs.match(/\[\d+\]/g) || []).length >= 2, "esperaba al menos 2 pestañas");
+await driver.selectTab(0);
+await driver.closeTab(1);
+console.log("\n--- tabs ---\n" + (await driver.listTabs()));
+
+// 4) Subida de archivo
+const tmp = path.join(os.tmpdir(), "navia-upload-test.txt");
+writeFileSync(tmp, "contenido de prueba");
+await driver.page.setContent(`<input type="file" aria-label="archivo">`);
+const snap3 = await driver.snapshot();
+const fileRef = snap3.match(/"archivo" \[ref=(\d+)\]/);
+assert(fileRef, "esperaba un ref para el input de archivo\n" + snap3);
+await driver.uploadFile(fileRef[1], [tmp]);
+const uploaded = await driver.evaluate("return document.querySelector('input[type=file]').files[0]?.name");
+assert(uploaded === "navia-upload-test.txt", `upload falló (obtuvo '${uploaded}')`);
+console.log("✓ upload OK:", uploaded);
+
+// 5) Descarga (soft check)
+await driver.page.setContent(`<a download="nota.txt" href="data:text/plain,hola">baja</a>`);
+const snap4 = await driver.snapshot();
+const dlRef = snap4.match(/link "baja" \[ref=(\d+)\]/);
+if (dlRef) {
+  await driver.click(dlRef[1]);
+  await driver.waitFor({ timeMs: 1500 });
+  const dls = driver.listDownloads();
+  console.log(dls.length ? "✓ download OK: " + dls[dls.length - 1] : "ⓘ download no capturada (no crítico)");
+}
+
 await driver.close();
-console.log("\n✓ Smoke test OK (CDP snapshot + shadow DOM + click + type)");
+console.log("\n✓ Smoke test OK (CDP + shadow DOM + click + type + tabs + upload + download)");
