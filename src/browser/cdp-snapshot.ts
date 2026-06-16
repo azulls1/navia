@@ -69,7 +69,7 @@ export interface ParsedSnapshot {
   refs: Set<string>;
 }
 
-export function parseAxTree(nodes: AXNode[]): ParsedSnapshot {
+export function parseAxTree(nodes: AXNode[], refPrefix = ""): ParsedSnapshot {
   const byId = new Map<string, AXNode>();
   for (const n of nodes) byId.set(n.nodeId, n);
 
@@ -94,7 +94,7 @@ export function parseAxTree(nodes: AXNode[]): ParsedSnapshot {
       const interactive = (INTERACTIVE_ROLES.has(role) || focusable) && n.backendDOMNodeId != null;
 
       if (interactive) {
-        const ref = String(n.backendDOMNodeId);
+        const ref = `${refPrefix}${n.backendDOMNodeId}`;
         refs.add(ref);
         const flags: string[] = [];
         if (prop(n, "checked") === true || prop(n, "checked") === "true") flags.push("checked");

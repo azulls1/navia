@@ -32,6 +32,8 @@ export class BrowserDriver {
   private lastSig: string | null = null;
   /** Rutas de archivos descargados durante la sesión. */
   private downloads: string[] = [];
+  /** Sesiones CDP por iframe cross-origin (OOPIF), por ordinal del último snapshot. */
+  private frameSessions = new Map<number, CDPSession>();
   page!: Page;
 
   static async create(opts: LaunchOptions): Promise<BrowserDriver> {
@@ -66,6 +68,8 @@ export class BrowserDriver {
     this.cdp = undefined;
     this.refMode = "legacy";
     this.lastSig = null;
+    for (const s of this.frameSessions.values()) s.detach().catch(() => {});
+    this.frameSessions.clear();
   }
 
   /** Crea (una vez) la sesión CDP si el motor la soporta. Firefox → null. */
@@ -90,18 +94,31 @@ export class BrowserDriver {
     return this.page.locator(`[${REF_ATTR}="${ref}"]`).first();
   }
 
-  /** Resuelve un ref CDP (backendNodeId) a un objectId remoto para actuar sobre él. */
-  private async resolveCdpRef(ref: string): Promise<string> {
-    const backendNodeId = Number(ref);
-    if (!Number.isFinite(backendNodeId)) throw new Error(`ref inválido "${ref}" (haz snapshot)`);
-    const res = (await this.cdp!.send("DOM.resolveNode", { backendNodeId } as any)) as any;
+  /**
+   * Resuelve un ref a {sesión CDP, objectId}. Los refs compuestos `fN_<id>` apuntan a un
+   * iframe cross-origin (OOPIF) y usan la sesión de ese frame; los simples, la principal.
+   */
+  private async resolveRef(ref: string): Promise<{ session: CDPSession; objectId: string }> {
+    const m = ref.match(/^f(\d+)_(\d+)$/);
+    let session: CDPSession | undefined;
+    let backendNodeId: number;
+    if (m) {
+      session = this.frameSessions.get(Number(m[1]));
+      backendNodeId = Number(m[2]);
+      if (!session) throw new Error(`ref de iframe "${ref}" caduco; haz snapshot`);
+    } else {
+      session = this.cdp!;
+      backendNodeId = Number(ref);
+      if (!Number.isFinite(backendNodeId)) throw new Error(`ref inválido "${ref}" (haz snapshot)`);
+    }
+    const res = (await session.send("DOM.resolveNode", { backendNodeId } as any)) as any;
     const objectId = res?.object?.objectId;
     if (!objectId) throw new Error(`no se pudo resolver el ref ${ref} (puede haber cambiado; haz snapshot)`);
-    return objectId;
+    return { session, objectId };
   }
 
-  private async callOn(objectId: string, fnDecl: string, args: unknown[] = []): Promise<void> {
-    await this.cdp!.send("Runtime.callFunctionOn", {
+  private async callOn(session: CDPSession, objectId: string, fnDecl: string, args: unknown[] = []): Promise<void> {
+    await session.send("Runtime.callFunctionOn", {
       objectId,
       functionDeclaration: fnDecl,
       arguments: args.map((value) => ({ value })),
@@ -123,13 +140,80 @@ export class BrowserDriver {
         const parsed = parseAxTree(nodes);
         this.refMode = "cdp";
         const title = await this.page.title().catch(() => "");
-        return `Página: ${title}\nURL: ${this.page.url()}\n${parsed.text}`;
+        const frameText = await this.snapshotChildFrames();
+        return `Página: ${title}\nURL: ${this.page.url()}\n${parsed.text}${frameText}`;
       } catch {
         // si CDP falla puntualmente, caemos al método legacy
       }
     }
     this.refMode = "legacy";
     return takeSnapshot(this.page);
+  }
+
+  /**
+   * El getFullAXTree de la página NO incluye el contenido de los iframes. Aquí lo añadimos:
+   *  1) Frames same-process: getFullAXTree({frameId}) sobre la sesión principal → refs simples
+   *     (el backendNodeId resuelve en el proceso principal).
+   *  2) OOPIF (cross-site, otro proceso): sesión CDP propia del frame → refs compuestos
+   *     `fN_<backendNodeId>` (donde viven Turnstile, logins y pagos cross-origin).
+   */
+  private async snapshotChildFrames(): Promise<string> {
+    for (const s of this.frameSessions.values()) s.detach().catch(() => {});
+    this.frameSessions.clear();
+    let out = "";
+
+    // (1) Frames same-process vía frameId sobre la sesión principal.
+    const sameProcessFrameIds = new Set<string>();
+    try {
+      const { frameTree } = (await this.cdp!.send("Page.getFrameTree", {} as any)) as any;
+      const children: Array<{ id: string; url: string }> = [];
+      const collect = (node: any) => {
+        for (const c of node.childFrames ?? []) {
+          children.push({ id: c.frame.id, url: c.frame.url });
+          collect(c);
+        }
+      };
+      collect(frameTree);
+      for (const f of children) {
+        sameProcessFrameIds.add(f.id);
+        try {
+          const { nodes } = (await this.cdp!.send("Accessibility.getFullAXTree", { frameId: f.id } as any)) as unknown as { nodes: AXNode[] };
+          const parsed = parseAxTree(nodes);
+          if (parsed.refs.size > 0) out += `\n[iframe: ${f.url || "(?)"}]\n${parsed.text}`;
+        } catch {
+          /* OOPIF u otro proceso → lo intenta (2) */
+        }
+      }
+    } catch {
+      /* sin frame tree */
+    }
+
+    // (2) OOPIF: sesión propia del frame, refs compuestos.
+    const ctx = this.page.context();
+    let ordinal = 0;
+    for (const frame of this.page.frames()) {
+      if (frame === this.page.mainFrame()) continue;
+      const url = frame.url();
+      if (!url || url === "about:blank") continue;
+      let fs: CDPSession;
+      try {
+        fs = await ctx.newCDPSession(frame); // same-process lanza → ya cubierto en (1)
+      } catch {
+        continue;
+      }
+      ordinal++;
+      try {
+        await fs.send("DOM.enable").catch(() => {});
+        await fs.send("Accessibility.enable").catch(() => {});
+        const { nodes } = (await fs.send("Accessibility.getFullAXTree", {} as any)) as unknown as { nodes: AXNode[] };
+        this.frameSessions.set(ordinal, fs);
+        const parsed = parseAxTree(nodes, `f${ordinal}_`);
+        out += `\n[iframe ${ordinal} (cross-origin): ${url}]\n${parsed.text}`;
+      } catch {
+        out += `\n[iframe ${ordinal} (cross-origin): ${url}] (no se pudo leer)`;
+      }
+    }
+    return out;
   }
 
   async snapshot(): Promise<string> {
@@ -162,8 +246,8 @@ export class BrowserDriver {
 
   async click(ref: string): Promise<void> {
     if (this.refMode === "cdp" && this.cdp) {
-      const objectId = await this.resolveCdpRef(ref);
-      await this.callOn(objectId, 'function(){ this.scrollIntoView({block:"center",inline:"center"}); this.click(); }');
+      const { session, objectId } = await this.resolveRef(ref);
+      await this.callOn(session, objectId, 'function(){ this.scrollIntoView({block:"center",inline:"center"}); this.click(); }');
       return;
     }
     const loc = this.legacyLocator(ref);
@@ -176,9 +260,9 @@ export class BrowserDriver {
 
   async type(ref: string, text: string, opts?: { submit?: boolean; slowly?: boolean }): Promise<void> {
     if (this.refMode === "cdp" && this.cdp) {
-      const objectId = await this.resolveCdpRef(ref);
+      const { session, objectId } = await this.resolveRef(ref);
       // Enfoca y limpia vía JS; teclea con eventos reales (amigable con React).
-      await this.callOn(objectId, 'function(){ this.scrollIntoView({block:"center"}); this.focus(); if ("value" in this) this.value=""; }');
+      await this.callOn(session, objectId, 'function(){ this.scrollIntoView({block:"center"}); this.focus(); if ("value" in this) this.value=""; }');
       await this.page.keyboard.type(text, { delay: opts?.slowly ? 60 : 0 });
       if (opts?.submit) await this.page.keyboard.press("Enter");
       return;
@@ -194,23 +278,24 @@ export class BrowserDriver {
   async fillForm(fields: FillField[]): Promise<void> {
     for (const f of fields) {
       if (this.refMode === "cdp" && this.cdp) {
-        const objectId = await this.resolveCdpRef(f.ref);
+        const { session, objectId } = await this.resolveRef(f.ref);
         switch (f.type) {
           case "checkbox":
           case "radio": {
             const want = f.value === "true" || f.value === "1";
-            await this.callOn(objectId, "function(v){ if (this.checked !== v) this.click(); }", [want]);
+            await this.callOn(session, objectId, "function(v){ if (this.checked !== v) this.click(); }", [want]);
             break;
           }
           case "combobox":
             await this.callOn(
+              session,
               objectId,
               "function(v){ const o=[...this.options].find(o=>o.label===v||o.value===v||o.text===v); if(o)this.value=o.value; this.dispatchEvent(new Event('change',{bubbles:true})); }",
               [f.value],
             );
             break;
           default:
-            await this.callOn(objectId, 'function(){ this.focus(); if("value" in this) this.value=""; }');
+            await this.callOn(session, objectId, 'function(){ this.focus(); if("value" in this) this.value=""; }');
             await this.page.keyboard.type(f.value, { delay: 0 });
         }
         continue;
@@ -233,8 +318,9 @@ export class BrowserDriver {
 
   async selectOption(ref: string, values: string[]): Promise<void> {
     if (this.refMode === "cdp" && this.cdp) {
-      const objectId = await this.resolveCdpRef(ref);
+      const { session, objectId } = await this.resolveRef(ref);
       await this.callOn(
+        session,
         objectId,
         "function(vals){ for (const o of this.options) o.selected = vals.includes(o.value)||vals.includes(o.label)||vals.includes(o.text); this.dispatchEvent(new Event('change',{bubbles:true})); }",
         [values],
@@ -303,7 +389,10 @@ export class BrowserDriver {
   /** Sube archivos a un <input type="file"> por su ref. */
   async uploadFile(ref: string, paths: string[]): Promise<void> {
     if (this.refMode === "cdp" && this.cdp) {
-      await this.cdp.send("DOM.setFileInputFiles", { files: paths, backendNodeId: Number(ref) } as any);
+      const m = ref.match(/^f(\d+)_(\d+)$/);
+      const session = m ? this.frameSessions.get(Number(m[1])) : this.cdp;
+      if (!session) throw new Error(`ref de iframe "${ref}" caduco; haz snapshot`);
+      await session.send("DOM.setFileInputFiles", { files: paths, backendNodeId: Number(m ? m[2] : ref) } as any);
       return;
     }
     await this.legacyLocator(ref).setInputFiles(paths);

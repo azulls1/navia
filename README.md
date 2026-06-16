@@ -147,7 +147,7 @@ Tu instrucción ─► BrowserAgent (loop de tool-use con Claude)
 ```
 
 1. **snapshot** = árbol de accesibilidad con `ref` por elemento (la IA actúa por `ref`).
-   - En **Chromium/Chrome** el snapshot se construye con **CDP** (`Accessibility.getFullAXTree`): no muta el DOM, atraviesa **shadow DOM**, y los `ref` son **estables** (`backendNodeId`). Las acciones se resuelven por CDP.
+   - En **Chromium/Chrome** el snapshot se construye con **CDP** (`Accessibility.getFullAXTree`): no muta el DOM, atraviesa **shadow DOM** e **iframes** (same-process por `frameId`; cross-origin/OOPIF como Turnstile vía sesión CDP propia, con refs compuestos `fN_id`), y los `ref` son **estables** (`backendNodeId`). Las acciones se resuelven por CDP.
    - En **Firefox** (que no habla CDP) se usa un snapshot por inyección de JS como *fallback*; ahí los `ref` son efímeros → re-snapshotea tras cambios del DOM.
 2. **evaluate** ejecuta JS para extraer listados o resolver clics tercos.
 3. **detectChallenge** reconoce muros (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome) y cede la ventana al humano.
