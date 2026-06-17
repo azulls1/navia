@@ -25,12 +25,22 @@ import type { BrowserEngine } from "./browser/launch.js";
 
 loadEnv({ quiet: true });
 
+// Silencia SOLO el DeprecationWarning DEP0190 (spawn con shell:true + args). Los CLIs de IA
+// en Windows (claude.cmd/ant.cmd) requieren shell; el contenido no confiable viaja por stdin,
+// no por argv, así que la advertencia no aplica a nuestro uso. No silencia otros warnings.
+const _origEmitWarning = process.emitWarning.bind(process);
+(process as any).emitWarning = (warning: unknown, ...rest: any[]): void => {
+  const code = rest[0] && typeof rest[0] === "object" ? rest[0].code : rest[1];
+  if (code === "DEP0190") return;
+  (_origEmitWarning as any)(warning, ...rest);
+};
+
 const program = new Command();
 
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.20.0");
+  .version("0.21.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -171,8 +181,13 @@ async function runTask(task: string, flags: RunFlags) {
         nextTask: flags.chat
           ? async () => {
               const n = await ask(pc.cyan("\n🧠 ¿Qué hago ahora? (Enter o 'salir' para terminar): "));
-              if (!n || /^(salir|exit|quit|q|no|fin)$/i.test(n)) return null;
-              return n;
+              const norm = n.toLowerCase();
+              // Vacío, palabra exacta corta, o frase que EMPIEZA con intención de salir.
+              const quiere_salir =
+                !norm ||
+                /^(no|nada|ya|listo)$/.test(norm) ||
+                /^(salir|sal|exit|quit|q|fin|terminar|termina|cerrar|cierra|adios|adiós|chao|chau|bye)\b/.test(norm);
+              return quiere_salir ? null : n;
             }
           : undefined,
       },
