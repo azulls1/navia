@@ -12,10 +12,12 @@ name: Release & Publish
 #
 # Nota: el publish necesita 2FA en modo "auth-only" (no "auth and writes") para que el
 # OIDC del CI pueda publicar sin código. Cámbialo en npmjs.com → Account → Two-Factor.
+#
+# ESTADO: DESACTIVADO del automático por preferencia del mantenedor (se publica a mano).
+# Para activarlo, configura el Trusted Publisher en npmjs.com (ver arriba) y vuelve a poner
+# el trigger `release: [published]`. Por ahora solo corre con el botón manual (workflow_dispatch).
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions:
