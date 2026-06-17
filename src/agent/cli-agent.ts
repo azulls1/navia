@@ -113,8 +113,14 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     if (recorder.path) hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
     await recorder.log({ type: "start", task: opts.task, engine, provider: "claude-cli" });
 
-    for (let step = 1; step <= maxSteps; step++) {
-      const prompt = `${system}
+    let totalSteps = 0;
+    // Bucle de CONVERSACIÓN: resuelve una tarea y, si hay hook nextTask, pide la siguiente
+    // reusando el MISMO navegador/sesión y el historial (transcript) acumulado.
+    for (;;) {
+      let summary: string | null = null;
+      for (let step = 1; step <= maxSteps; step++) {
+        totalSteps++;
+        const prompt = `${system}
 
 HERRAMIENTAS DISPONIBLES (usa exactamente estos nombres):
 ${toolCatalog}
@@ -127,45 +133,53 @@ Decide la PRÓXIMA acción para avanzar la tarea. Responde ÚNICAMENTE con UN ob
 o, si la tarea ya está completa o no puedes continuar:
 {"done":true,"summary":"resumen claro de lo que hiciste y los datos obtenidos"}`;
 
-      let raw: string;
-      try {
-        raw = await cliComplete(prompt, { command: opts.cliCommand, model: opts.model, timeoutMs: 180000 });
-      } catch (e) {
-        return { summary: `Error del proveedor CLI: ${(e as Error).message}`, steps: step };
-      }
+        let raw: string;
+        try {
+          raw = await cliComplete(prompt, { command: opts.cliCommand, model: opts.model, timeoutMs: 180000 });
+        } catch (e) {
+          return { summary: `Error del proveedor CLI: ${(e as Error).message}`, steps: totalSteps };
+        }
 
-      const action = extractJson(raw);
-      if (!action) {
-        transcript.push(`(respuesta no-JSON ignorada: ${truncate(raw, 200)})`);
+        const action = extractJson(raw);
+        if (!action) {
+          transcript.push(`(respuesta no-JSON ignorada: ${truncate(raw, 200)})`);
+          pruneTranscript(transcript);
+          continue;
+        }
+        if (action.done) {
+          const s: string = action.summary ?? "(sin resumen)";
+          summary = s;
+          await recorder.log({ step: totalSteps, type: "done", summary: preview(s) });
+          await ws?.writeSummary(s);
+          break;
+        }
+        if (!action.tool) {
+          transcript.push("(acción sin 'tool' ignorada)");
+          continue;
+        }
+
+        hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
+        const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
+        try {
+          const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks);
+          const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
+          transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
+          transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
+          await recorder.log({ step: totalSteps, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: true, result: preview(obs) });
+        } catch (e) {
+          transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
+          await recorder.log({ step: totalSteps, type: "action", tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: false, error: (e as Error).message });
+        }
         pruneTranscript(transcript);
-        continue;
-      }
-      if (action.done) {
-        await recorder.log({ step, type: "done", summary: preview(action.summary ?? "") });
-        await ws?.writeSummary(action.summary ?? "(sin resumen)");
-        return { summary: action.summary ?? "(sin resumen)", steps: step };
-      }
-      if (!action.tool) {
-        transcript.push("(acción sin 'tool' ignorada)");
-        continue;
       }
 
-      hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
-      const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
-      try {
-        const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks);
-        const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
-        transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
-        transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
-        await recorder.log({ step, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: true, result: preview(obs) });
-      } catch (e) {
-        transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
-        await recorder.log({ step, type: "action", tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: false, error: (e as Error).message });
-      }
-      pruneTranscript(transcript);
+      if (summary === null) summary = `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`;
+
+      hooks.onTaskSummary?.(summary, totalSteps);
+      const next = hooks.nextTask ? await hooks.nextTask() : null;
+      if (!next) return { summary, steps: totalSteps };
+      transcript.push(`NUEVA TAREA (misma sesión del navegador): ${next}`);
     }
-
-    return { summary: `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`, steps: maxSteps };
   } finally {
     await driver.close();
   }

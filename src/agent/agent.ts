@@ -114,6 +114,8 @@ export class BrowserAgent {
       confirmAction: opts.hooks?.confirmAction ?? (async () => false),
       waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
       log: opts.hooks?.log,
+      onTaskSummary: opts.hooks?.onTaskSummary,
+      nextTask: opts.hooks?.nextTask,
     };
   }
 
@@ -178,82 +180,91 @@ export class BrowserAgent {
         },
       ];
 
-      let steps = 0;
-      while (steps < maxSteps) {
-        steps++;
-        pruneHistory(messages);
-        setCacheBreakpoint(messages);
-        const response = await this.client.messages.create({
-          model,
-          max_tokens: 4096,
-          system: systemBlocks,
-          tools: cachedTools,
-          messages,
-        });
+      let totalSteps = 0;
+      // Bucle de CONVERSACIÓN: cada iteración resuelve una tarea; si hay hook nextTask, al
+      // terminar pide la siguiente reusando el MISMO navegador/sesión y el historial completo.
+      for (;;) {
+        let steps = 0;
+        let summary: string | null = null;
+        while (steps < maxSteps) {
+          steps++;
+          totalSteps++;
+          pruneHistory(messages);
+          setCacheBreakpoint(messages);
+          const response = await this.client.messages.create({
+            model,
+            max_tokens: 4096,
+            system: systemBlocks,
+            tools: cachedTools,
+            messages,
+          });
 
-        messages.push({ role: "assistant", content: response.content });
+          messages.push({ role: "assistant", content: response.content });
 
-        const toolUses = response.content.filter(
-          (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",
-        );
+          const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
 
-        // Texto que va emitiendo la IA (pensamiento/avances).
-        for (const block of response.content) {
-          if (block.type === "text" && block.text.trim()) {
-            this.hooks.log?.(`💬 ${block.text.trim()}`);
-            await recorder.log({ step: steps, type: "thought", text: preview(block.text.trim()) });
+          // Texto que va emitiendo la IA (pensamiento/avances).
+          for (const block of response.content) {
+            if (block.type === "text" && block.text.trim()) {
+              this.hooks.log?.(`💬 ${block.text.trim()}`);
+              await recorder.log({ step: totalSteps, type: "thought", text: preview(block.text.trim()) });
+            }
           }
-        }
 
-        if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
-          const finalText = response.content
-            .filter((b): b is Anthropic.TextBlock => b.type === "text")
-            .map((b) => b.text)
-            .join("\n")
-            .trim();
-          await recorder.log({ step: steps, type: "done", summary: preview(finalText) });
-          return { summary: finalText || "(sin resumen)", steps };
-        }
+          if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
+            summary = response.content
+              .filter((b): b is Anthropic.TextBlock => b.type === "text")
+              .map((b) => b.text)
+              .join("\n")
+              .trim();
+            await recorder.log({ step: totalSteps, type: "done", summary: preview(summary) });
+            break;
+          }
 
-        // Ejecuta todas las tools pedidas y arma los tool_result.
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const tu of toolUses) {
-          const refForLoc = (tu.input as any)?.ref;
-          const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
-          try {
-            const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks);
-            const content: Anthropic.ToolResultBlockParam["content"] = [];
-            if (out.text) content.push({ type: "text", text: out.text });
-            if (out.imageBase64)
-              content.push({
-                type: "image",
-                source: { type: "base64", media_type: "image/png", data: out.imageBase64 },
+          // Ejecuta todas las tools pedidas y arma los tool_result.
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const tu of toolUses) {
+            const refForLoc = (tu.input as any)?.ref;
+            const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
+            try {
+              const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks);
+              const content: Anthropic.ToolResultBlockParam["content"] = [];
+              if (out.text) content.push({ type: "text", text: out.text });
+              if (out.imageBase64)
+                content.push({ type: "image", source: { type: "base64", media_type: "image/png", data: out.imageBase64 } });
+              toolResults.push({ type: "tool_result", tool_use_id: tu.id, content });
+              await recorder.log({
+                step: totalSteps,
+                type: "action",
+                tool: tu.name,
+                input: tu.input,
+                locator: locator ?? undefined,
+                ok: true,
+                result: preview(out.text ?? (out.imageBase64 ? "[screenshot]" : "")),
               });
-            toolResults.push({ type: "tool_result", tool_use_id: tu.id, content });
-            await recorder.log({
-              step: steps,
-              type: "action",
-              tool: tu.name,
-              input: tu.input,
-              locator: locator ?? undefined,
-              ok: true,
-              result: preview(out.text ?? (out.imageBase64 ? "[screenshot]" : "")),
-            });
-          } catch (err) {
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: tu.id,
-              content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
-              is_error: true,
-            });
-            await recorder.log({ step: steps, type: "action", tool: tu.name, input: tu.input, locator: locator ?? undefined, ok: false, error: (err as Error).message });
+            } catch (err) {
+              toolResults.push({
+                type: "tool_result",
+                tool_use_id: tu.id,
+                content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
+                is_error: true,
+              });
+              await recorder.log({ step: totalSteps, type: "action", tool: tu.name, input: tu.input, locator: locator ?? undefined, ok: false, error: (err as Error).message });
+            }
           }
+          messages.push({ role: "user", content: toolResults });
         }
-        messages.push({ role: "user", content: toolResults });
-      }
 
-      await recorder.log({ type: "done", steps, summary: "max-steps" });
-      return { summary: `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`, steps };
+        if (summary === null) {
+          summary = `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`;
+          await recorder.log({ step: totalSteps, type: "done", summary: "max-steps" });
+        }
+
+        this.hooks.onTaskSummary?.(summary, totalSteps);
+        const next = this.hooks.nextTask ? await this.hooks.nextTask() : null;
+        if (!next) return { summary, steps: totalSteps };
+        messages.push({ role: "user", content: `Nueva tarea (misma sesión del navegador): ${next}` });
+      }
     } finally {
       await driver.close();
     }
@@ -273,6 +284,8 @@ export async function runNavia(opts: NaviaOptions): Promise<NaviaResult> {
       confirmAction: opts.hooks?.confirmAction ?? (async () => false),
       waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
       log: opts.hooks?.log,
+      onTaskSummary: opts.hooks?.onTaskSummary,
+      nextTask: opts.hooks?.nextTask,
     };
     return runViaCli(opts, hooks);
   }

@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.18.0");
+  .version("0.19.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -47,6 +47,7 @@ interface RunFlags {
   record?: boolean | string;
   yes?: boolean;
   workspace?: boolean | string;
+  chat?: boolean;
 }
 
 /**
@@ -161,11 +162,22 @@ async function runTask(task: string, flags: RunFlags) {
           console.log(pc.yellow(`\n🙋 Necesito que hagas algo en la ventana del navegador:\n   ${reason}`));
           return ask(pc.yellow("Cuando termines, presiona Enter (o escribe una nota): "));
         },
+        // Modo conversación: muestra el resumen de cada tarea…
+        onTaskSummary: (summary, steps) => {
+          console.log(pc.green(`\n✓ Terminado en ${steps} pasos.\n`));
+          console.log(summary);
+        },
+        // …y, si es chat, pide la siguiente reusando el MISMO navegador/sesión.
+        nextTask: flags.chat
+          ? async () => {
+              const n = await ask(pc.cyan("\n🧠 ¿Qué hago ahora? (Enter o 'salir' para terminar): "));
+              if (!n || /^(salir|exit|quit|q|no|fin)$/i.test(n)) return null;
+              return n;
+            }
+          : undefined,
       },
     });
-
-    console.log(pc.green("\n✓ Terminado en " + result.steps + " pasos.\n"));
-    console.log(result.summary);
+    void result;
   } catch (err) {
     console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
     process.exitCode = 1;
@@ -327,6 +339,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       provider,
       cliCommand,
       workspace,
+      chat: true, // el wizard es conversacional: al terminar pregunta "¿qué hago ahora?"
       startUrl: startUrl || base.startUrl,
     } as RunFlags);
   } finally {
@@ -349,6 +362,7 @@ const browserOpt = (cmd: Command) =>
     .option("--record [path]", "registrar la corrida en JSONL (default ~/.navia/trajectories/; o una ruta. Tip: usa --workspace para bitácora completa)")
     .option("--workspace [dir]", "crear carpeta-bitácora (memoria) por tarea (auto: Obsidian/Escritorio, o la ruta dada)")
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
+    .option("--chat", "modo conversación: al terminar, mantiene el navegador y pide la siguiente tarea")
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.

@@ -14,6 +14,13 @@ export interface AgentHooks {
   waitForHuman: (reason: string) => Promise<string>;
   /** Log de progreso. */
   log?: (msg: string) => void;
+  /** Modo conversación: se llama al terminar cada tarea con su resumen (para mostrarlo). */
+  onTaskSummary?: (summary: string, steps: number) => void;
+  /**
+   * Modo conversación: tras terminar una tarea, pide la SIGUIENTE (reusando el mismo
+   * navegador/sesión y contexto). Devuelve la próxima instrucción, o null para terminar.
+   */
+  nextTask?: () => Promise<string | null>;
 }
 
 export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
