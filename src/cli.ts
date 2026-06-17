@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.14.0");
+  .version("0.15.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -182,26 +182,6 @@ function detectAgentHost(): string | null {
   return null;
 }
 
-/**
- * Garantiza que haya un motor de IA. Si ya hay API key o un CLI (claude/ant) → ok.
- * Si NO hay nada, en terminal interactiva pide una API key para poder funcionar.
- */
-async function ensureEngine(): Promise<void> {
-  if (process.env.ANTHROPIC_API_KEY) return;
-  const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
-  if (hasClaude || hasAnt) return; // el CLI ya es motor (sin key)
-
-  console.log(pc.yellow("\n⚠️  No detecté un motor de IA: ni ANTHROPIC_API_KEY, ni el CLI 'claude'/'ant'."));
-  console.log(pc.dim("Navia necesita un LLM para razonar. Pega una API key de Anthropic para continuar (o cancela e instala el CLI 'claude')."));
-  const key = (await promptHidden(pc.cyan("🔑 ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
-  if (!key) throw new Error("Sin motor de IA no puedo continuar. Define ANTHROPIC_API_KEY o instala el CLI 'claude'/'ant'.");
-  process.env.ANTHROPIC_API_KEY = key;
-  console.log(
-    pc.green("✓ API key cargada para esta sesión.") +
-      pc.dim(' Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…" (o ponla en un archivo .env).'),
-  );
-}
-
 async function runWizard(base: Partial<RunFlags>): Promise<void> {
   // No-interactivo (lo ejecuta otra IA/agente o un pipe): el wizard no puede pedir datos → no colgar.
   if (!process.stdin.isTTY) {
@@ -218,8 +198,6 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
   console.log("\n" + banner());
   console.log(pc.bold("\n ¡Bienvenido! Te hago unas preguntas para preparar la tarea.") + pc.dim("\n (Enter para el valor por defecto entre corchetes)\n"));
 
-  await ensureEngine(); // si no hay motor de IA, pide API key antes de seguir
-
   let rl = createInterface({ input, output });
   const ask = async (q: string, def?: string): Promise<string> => {
     const hint = def ? pc.dim(` [${def}]`) : "";
@@ -228,6 +206,38 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
   };
 
   try {
+    // 1) Motor de IA — decisión explícita y PRIMERA. API key (rápido) vs CLI de terminal (gratis).
+    const hasKey = !!process.env.ANTHROPIC_API_KEY;
+    const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
+    const cliName = hasAnt ? "ant" : hasClaude ? "claude" : null;
+    console.log(pc.cyan("🤖 ¿Qué motor de IA uso para razonar?"));
+    console.log(`  1) API key de Anthropic ${pc.dim("(rápido, recomendado)")}${hasKey ? pc.green("  [detectada ✓]") : ""}`);
+    console.log(
+      `  2) CLI de tu terminal${cliName ? ` (${cliName})` : ""} ${pc.dim("(gratis, más lento)")}` +
+        (cliName ? pc.green("  [disponible ✓]") : pc.dim("  [no disponible]")),
+    );
+    const engDef = hasKey ? "1" : cliName ? "2" : "1";
+    const eng = await ask(`Elige [1-2] (Enter=${engDef})`, engDef);
+
+    let provider: RunFlags["provider"];
+    if (eng.startsWith("2") && cliName) {
+      provider = "claude-cli";
+    } else {
+      provider = "api";
+      if (!process.env.ANTHROPIC_API_KEY) {
+        rl.close();
+        const key = (await promptHidden(pc.cyan("   🔑 ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
+        if (!key) {
+          console.log(pc.red("\n✗ Sin API key no puedo usar el modo API. Vuelve a correr y elige el CLI (opción 2), o define ANTHROPIC_API_KEY."));
+          return;
+        }
+        process.env.ANTHROPIC_API_KEY = key;
+        console.log(pc.green("   ✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")'));
+        rl = createInterface({ input, output });
+      }
+    }
+    console.log("");
+
     const startUrl = await ask("🌐 ¿URL de inicio?");
     const wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
 
@@ -252,8 +262,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       console.log(pc.red("\n✗ Necesito una instrucción para continuar."));
       return;
     }
-    const browser = (await ask("🖥️  Motor (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
-    const provider = (await ask("⚙️  Proveedor IA (auto|api|claude-cli)", base.provider ?? "auto")) as RunFlags["provider"];
+    const browser = (await ask("🖥️  Motor del navegador (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
 
     // Arma la tarea: si hay login, instruye usar fill_credential (la contraseña nunca pasa por el modelo).
     const task = wantsLogin
@@ -264,7 +273,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     const eq =
       `navia run ${JSON.stringify(taskPrompt)} --browser ${browser}` +
       (startUrl ? ` --start-url ${startUrl}` : "") +
-      (provider && provider !== "auto" ? ` --provider ${provider}` : "");
+      ` --provider ${provider}`;
     console.log(pc.dim("\n ─────────────────────────────────────────────"));
     console.log(" Voy a ejecutar:\n   " + pc.cyan(eq));
 
@@ -394,7 +403,12 @@ function cmdExists(bin: string): Promise<boolean> {
   return new Promise(async (resolve) => {
     const { spawn } = await import("node:child_process");
     try {
-      const child = spawn(bin, ["--version"], { shell: process.platform === "win32", stdio: "ignore" });
+      // En Windows muchos CLIs son .cmd/.ps1 → hace falta shell. Pasamos el comando como UNA
+      // sola cadena (sin array de args) para no disparar el DeprecationWarning DEP0190.
+      const child =
+        process.platform === "win32"
+          ? spawn(`"${bin}" --version`, { shell: true, stdio: "ignore", windowsHide: true })
+          : spawn(bin, ["--version"], { stdio: "ignore" });
       const timer = setTimeout(() => {
         child.kill();
         resolve(false);
