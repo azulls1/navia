@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.15.0");
+  .version("0.16.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -206,37 +206,35 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
   };
 
   try {
-    // 1) Motor de IA — decisión explícita y PRIMERA. API key (rápido) vs CLI de terminal (gratis).
-    const hasKey = !!process.env.ANTHROPIC_API_KEY;
-    const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
-    const cliName = hasAnt ? "ant" : hasClaude ? "claude" : null;
-    console.log(pc.cyan("🤖 ¿Qué motor de IA uso para razonar?"));
-    console.log(`  1) API key de Anthropic ${pc.dim("(rápido, recomendado)")}${hasKey ? pc.green("  [detectada ✓]") : ""}`);
-    console.log(
-      `  2) CLI de tu terminal${cliName ? ` (${cliName})` : ""} ${pc.dim("(gratis, más lento)")}` +
-        (cliName ? pc.green("  [disponible ✓]") : pc.dim("  [no disponible]")),
-    );
-    const engDef = hasKey ? "1" : cliName ? "2" : "1";
-    const eng = await ask(`Elige [1-2] (Enter=${engDef})`, engDef);
-
+    // 1) Motor de IA — AUTOMÁTICO (sin forzar elección):
+    //    API key si existe (rápido) → si no, el CLI claude/ant (gratis) → si no hay nada, pide la key.
     let provider: RunFlags["provider"];
-    if (eng.startsWith("2") && cliName) {
-      provider = "claude-cli";
-    } else {
+    let cliCommand = base.cliCommand;
+    if (process.env.ANTHROPIC_API_KEY) {
       provider = "api";
-      if (!process.env.ANTHROPIC_API_KEY) {
+      console.log(pc.dim("🤖 Motor de IA: API key de Anthropic (rápido).\n"));
+    } else {
+      const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
+      const cliName = hasAnt ? "ant" : hasClaude ? "claude" : null;
+      if (cliName) {
+        provider = "claude-cli";
+        cliCommand = cliName;
+        console.log(pc.dim(`🤖 Motor de IA: tu CLI '${cliName}' (gratis, más lento). Para más velocidad define ANTHROPIC_API_KEY.\n`));
+      } else {
+        // No hay ningún motor → ahí SÍ pedimos la API key (no se puede funcionar sin LLM).
+        provider = "api";
+        console.log(pc.yellow("⚠️  No detecté un motor de IA (ni ANTHROPIC_API_KEY ni el CLI 'claude'/'ant')."));
         rl.close();
-        const key = (await promptHidden(pc.cyan("   🔑 ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
+        const key = (await promptHidden(pc.cyan("🔑 Pega tu ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
         if (!key) {
-          console.log(pc.red("\n✗ Sin API key no puedo usar el modo API. Vuelve a correr y elige el CLI (opción 2), o define ANTHROPIC_API_KEY."));
+          console.log(pc.red("\n✗ Sin motor de IA no puedo continuar. Define ANTHROPIC_API_KEY o instala el CLI 'claude'."));
           return;
         }
         process.env.ANTHROPIC_API_KEY = key;
-        console.log(pc.green("   ✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")'));
+        console.log(pc.green("✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")\n'));
         rl = createInterface({ input, output });
       }
     }
-    console.log("");
 
     const startUrl = await ask("🌐 ¿URL de inicio?");
     const wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
@@ -288,6 +286,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       ...base,
       browser,
       provider,
+      cliCommand,
       startUrl: startUrl || base.startUrl,
     } as RunFlags);
   } finally {
