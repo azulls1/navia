@@ -7,7 +7,8 @@
  */
 import { encryptJSON, decryptJSON, type EncryptedBlob } from "../browser/session-store.js";
 import { resolveSecret } from "./key.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -66,4 +67,27 @@ export async function getTotpSecret(key: string): Promise<string | undefined> {
 export async function listKeys(): Promise<{ secrets: string[]; totp: string[] }> {
   const d = await read();
   return { secrets: Object.keys(d.secrets), totp: Object.keys(d.totp) };
+}
+
+/** ¿El vault actual se puede leer/descifrar? (true si no existe, está en claro, o descifra bien). */
+export async function isVaultReadable(): Promise<boolean> {
+  try {
+    await read();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Respalda el vault actual (lo RENOMBRA a un .bak, NO lo borra) para poder empezar limpio
+ * sin perder el archivo previo. Devuelve la ruta del respaldo, o null si no había vault.
+ */
+export async function backupVault(): Promise<string | null> {
+  const file = vaultFile();
+  if (!existsSync(file)) return null;
+  let bak = `${file}.bak`;
+  for (let i = 1; existsSync(bak); i++) bak = `${file}.bak${i}`;
+  await rename(file, bak);
+  return bak;
 }

@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.16.0");
+  .version("0.17.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -243,6 +243,21 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     let secretKey = "";
     if (wantsLogin) {
       user = await ask("   👤 Usuario");
+
+      // Si hay un vault previo ilegible (cifrado con otra llave), NO borrar: respaldar y seguir.
+      const { isVaultReadable, backupVault } = await import("./secrets/vault.js");
+      if (!(await isVaultReadable())) {
+        console.log(pc.yellow("\n   ⚠️  Hay un vault de contraseñas previo que no puedo descifrar (se creó con otra llave/NAVIA_SECRET)."));
+        console.log(pc.dim("   (Esto es SOLO el archivo de contraseñas de Navia, ~/.navia/vault.json. Tu bóveda de Obsidian NO se toca.)"));
+        const resp = await ask("   ¿Lo respaldo (.bak, no se borra) y sigo? (S/n)", "S");
+        if (!/^(s|y)/i.test(resp)) {
+          console.log(pc.dim("   Cancelado. Si lo cifraste con un NAVIA_SECRET, defínelo ($env:NAVIA_SECRET=…) y vuelve a correr."));
+          return;
+        }
+        const bak = await backupVault();
+        if (bak) console.log(pc.green(`   ✓ Vault previo respaldado en: ${bak}`));
+      }
+
       rl.close(); // promptHidden toma control de stdin; cierra readline antes.
       const pass = await promptHidden(pc.cyan("   🔑 Contraseña (no se muestra): "));
       secretKey = "wizard-login";
@@ -261,6 +276,17 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       return;
     }
     const browser = (await ask("🖥️  Motor del navegador (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
+
+    // Bitácora/registro: detecta bóvedas de Obsidian y deja elegir dónde crear la carpeta de Navia.
+    let workspace: boolean | string | undefined = base.workspace;
+    const wantsWs = /^(s|y)/i.test(await ask("🧠 ¿Guardar bitácora/registro de la tarea? (S/n)", "S"));
+    if (wantsWs) {
+      rl.close();
+      workspace = await chooseWorkspace(); // lista vaults de Obsidian + carpeta del SO + ruta a mano
+      rl = createInterface({ input, output });
+    } else {
+      workspace = undefined;
+    }
 
     // Arma la tarea: si hay login, instruye usar fill_credential (la contraseña nunca pasa por el modelo).
     const task = wantsLogin
@@ -287,6 +313,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       browser,
       provider,
       cliCommand,
+      workspace,
       startUrl: startUrl || base.startUrl,
     } as RunFlags);
   } finally {
@@ -533,6 +560,14 @@ secret
   .command("set <clave>")
   .description("Guarda una contraseña/secreto (te lo pide sin mostrarlo)")
   .action(async (clave: string) => {
+    const { isVaultReadable } = await import("./secrets/vault.js");
+    if (!(await isVaultReadable())) {
+      console.error(
+        pc.red("✗ No puedo leer el vault actual (cifrado con otra llave/NAVIA_SECRET).") +
+          pc.dim("\n  Si lo cifraste con un NAVIA_SECRET, defínelo y reintenta. O empieza limpio (respalda el viejo): navia secret reset"),
+      );
+      process.exit(1);
+    }
     const value = await promptHidden(`Valor para "${clave}" (no se muestra): `);
     await setSecret(clave, value);
     console.log(pc.green(`✓ Secreto "${clave}" guardado. Úsalo con fill_credential(ref, "${clave}").`));
@@ -552,6 +587,15 @@ secret
     const { secrets, totp } = await listKeys();
     console.log(pc.cyan("Secretos:"), secrets.length ? secrets.join(", ") : pc.dim("(ninguno)"));
     console.log(pc.cyan("TOTP:"), totp.length ? totp.join(", ") : pc.dim("(ninguno)"));
+  });
+secret
+  .command("reset")
+  .description("Empieza un vault limpio. NO borra: respalda el vault actual a un .bak (útil si quedó cifrado con otra llave).")
+  .action(async () => {
+    const { backupVault } = await import("./secrets/vault.js");
+    const bak = await backupVault();
+    if (bak) console.log(pc.green(`✓ Vault respaldado en: ${bak}`) + pc.dim("\n  El próximo 'secret set' / wizard creará uno nuevo cifrado."));
+    else console.log(pc.dim("No había vault que respaldar; empezarás limpio."));
   });
 
 // `navia login <perfil>` — abre el navegador para iniciar sesión y guarda el perfil.
