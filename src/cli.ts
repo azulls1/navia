@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.17.0");
+  .version("0.18.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -54,11 +54,12 @@ interface RunFlags {
  * construyen en runtime según el equipo (vaults de Obsidian detectados, base por
  * defecto del SO, o una ruta a mano). Devuelve la carpeta base elegida.
  */
-async function chooseWorkspace(): Promise<string | undefined> {
+async function chooseWorkspace(existing?: ReturnType<typeof createInterface>): Promise<string | undefined> {
   const { detectObsidianVaults, defaultWorkspaceBase } = await import("./agent/workspace.js");
   const vaults = detectObsidianVaults();
   const folderBase = defaultWorkspaceBase();
-  const rl = createInterface({ input, output });
+  const rl = existing ?? createInterface({ input, output });
+  const ownRl = !existing;
   try {
     console.log(pc.cyan("\n🧠 ¿Dónde guardo la bitácora/memoria de esta tarea?"));
     const choices: string[] = [];
@@ -78,8 +79,26 @@ async function chooseWorkspace(): Promise<string | undefined> {
     }
     return choices[n - 1] ?? choices[0];
   } finally {
-    rl.close();
+    if (ownRl) rl.close();
   }
+}
+
+/**
+ * Pregunta de entrada OCULTA reutilizando el MISMO readline del wizard (no abre/cierra
+ * otro, lo que dejaba un salto de línea fantasma que la siguiente pregunta se comía).
+ * Enmascara lo tecleado redibujando solo el prompt en cada pulsación.
+ */
+function askHidden(rl: ReturnType<typeof createInterface>, query: string): Promise<string> {
+  const onData = (buf: Buffer) => {
+    const s = buf.toString();
+    if (s === "\n" || s === "\r" || s === "\r\n" || s === "") return; // Enter/EOT: no enmascarar
+    output.write("\x1b[2K\r" + query); // borra la línea y reescribe solo el prompt (oculta el valor)
+  };
+  process.stdin.on("data", onData);
+  return rl.question(query).then((v) => {
+    process.stdin.removeListener("data", onData);
+    return v.trim();
+  });
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -224,15 +243,13 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
         // No hay ningún motor → ahí SÍ pedimos la API key (no se puede funcionar sin LLM).
         provider = "api";
         console.log(pc.yellow("⚠️  No detecté un motor de IA (ni ANTHROPIC_API_KEY ni el CLI 'claude'/'ant')."));
-        rl.close();
-        const key = (await promptHidden(pc.cyan("🔑 Pega tu ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
+        const key = await askHidden(rl, pc.cyan("🔑 Pega tu ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "));
         if (!key) {
           console.log(pc.red("\n✗ Sin motor de IA no puedo continuar. Define ANTHROPIC_API_KEY o instala el CLI 'claude'."));
           return;
         }
         process.env.ANTHROPIC_API_KEY = key;
         console.log(pc.green("✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")\n'));
-        rl = createInterface({ input, output });
       }
     }
 
@@ -258,8 +275,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
         if (bak) console.log(pc.green(`   ✓ Vault previo respaldado en: ${bak}`));
       }
 
-      rl.close(); // promptHidden toma control de stdin; cierra readline antes.
-      const pass = await promptHidden(pc.cyan("   🔑 Contraseña (no se muestra): "));
+      const pass = await askHidden(rl, pc.cyan("   🔑 Contraseña (no se muestra): "));
       secretKey = "wizard-login";
       await setSecret(secretKey, pass);
       const { secretSource } = await import("./secrets/key.js");
@@ -267,7 +283,6 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
         pc.green(`   ✓ Contraseña guardada y cifrada`) +
           pc.dim(secretSource() === "env" ? " (con tu NAVIA_SECRET)." : " (llave gestionada por Navia en ~/.navia/key)."),
       );
-      rl = createInterface({ input, output });
     }
 
     const taskPrompt = await ask("🧠 ¿Qué quieres que haga?");
@@ -281,9 +296,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     let workspace: boolean | string | undefined = base.workspace;
     const wantsWs = /^(s|y)/i.test(await ask("🧠 ¿Guardar bitácora/registro de la tarea? (S/n)", "S"));
     if (wantsWs) {
-      rl.close();
-      workspace = await chooseWorkspace(); // lista vaults de Obsidian + carpeta del SO + ruta a mano
-      rl = createInterface({ input, output });
+      workspace = await chooseWorkspace(rl); // reusa el mismo readline; lista vaults de Obsidian + carpeta + ruta
     } else {
       workspace = undefined;
     }
