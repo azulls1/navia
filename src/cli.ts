@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.12.0");
+  .version("0.13.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -186,8 +186,11 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       const pass = await promptHidden(pc.cyan("   🔑 Contraseña (no se muestra): "));
       secretKey = "wizard-login";
       await setSecret(secretKey, pass);
-      if (process.env.NAVIA_SECRET) console.log(pc.green(`   ✓ Contraseña guardada cifrada como "${secretKey}".`));
-      else console.log(pc.yellow("   ⚠️  Sin NAVIA_SECRET la contraseña se guardó EN CLARO en ~/.navia/vault.json. Define NAVIA_SECRET para cifrarla."));
+      const { secretSource } = await import("./secrets/key.js");
+      console.log(
+        pc.green(`   ✓ Contraseña guardada y cifrada`) +
+          pc.dim(secretSource() === "env" ? " (con tu NAVIA_SECRET)." : " (llave gestionada por Navia en ~/.navia/key)."),
+      );
       rl = createInterface({ input, output });
     }
 
@@ -391,9 +394,9 @@ program
     console.log(`${ok(!!fPath)} Firefox de Playwright ${fPath ? "" : pc.dim("→ npx playwright install firefox")}`);
 
     console.log(
-      `${process.env.NAVIA_SECRET ? pc.green("✓") : pc.yellow("•")} NAVIA_SECRET ${
-        process.env.NAVIA_SECRET ? "definido (perfiles/vault cifrados)" : pc.dim("no definido (perfiles/vault en claro)")
-      }`,
+      process.env.NAVIA_SECRET
+        ? `${pc.green("✓")} Cifrado: NAVIA_SECRET definido (perfiles/vault cifrados con tu frase)`
+        : `${pc.green("✓")} Cifrado: llave gestionada por Navia ${pc.dim("(~/.navia/key; define NAVIA_SECRET para usar tu propia frase)")}`,
     );
 
     const listo = major >= 20 && engines.length > 0 && !!cPath;
@@ -464,7 +467,6 @@ secret
   .command("set <clave>")
   .description("Guarda una contraseña/secreto (te lo pide sin mostrarlo)")
   .action(async (clave: string) => {
-    if (!process.env.NAVIA_SECRET) console.log(pc.yellow("⚠️  Sin NAVIA_SECRET el vault se guarda en claro. Define NAVIA_SECRET para cifrarlo."));
     const value = await promptHidden(`Valor para "${clave}" (no se muestra): `);
     await setSecret(clave, value);
     console.log(pc.green(`✓ Secreto "${clave}" guardado. Úsalo con fill_credential(ref, "${clave}").`));
@@ -504,9 +506,10 @@ program
       console.log(pc.yellow(`\n🔐 Inicia sesión en la ventana del navegador (resuelve captcha/2FA si aparece).`));
       await rl.question(pc.yellow("Cuando hayas iniciado sesión, presiona Enter para guardar el perfil… "));
       const state = await driver.getStorageState();
-      const { file, encrypted } = await saveSession(perfil, state);
-      console.log(pc.green(`✓ Perfil "${perfil}" guardado${encrypted ? " (cifrado)" : ""}: ${file}`));
-      if (!encrypted) console.log(pc.dim("  Tip: define NAVIA_SECRET para cifrar el perfil (contiene cookies de sesión)."));
+      const { file } = await saveSession(perfil, state);
+      const { secretSource } = await import("./secrets/key.js");
+      console.log(pc.green(`✓ Perfil "${perfil}" guardado (cifrado): ${file}`));
+      console.log(pc.dim(secretSource() === "env" ? "  Cifrado con tu NAVIA_SECRET." : "  Cifrado con la llave gestionada por Navia (~/.navia/key)."));
       console.log(pc.dim(`  Úsalo:  navia run "tu tarea" --browser ${opts.browser} --profile ${perfil}`));
     } finally {
       await driver.close();

@@ -81,7 +81,7 @@ navia login my-portal --browser chromium --start-url https://my-portal.com/login
 navia run "download my latest invoice" --profile my-portal
 ```
 - Profiles are saved in `~/.navia/profiles/` (covered by `.gitignore`).
-- Set **`NAVIA_SECRET`** to **encrypt** the profile (AES-256-GCM). It holds session cookies — recommended.
+- **Always encrypted (AES-256-GCM).** By default Navia auto-generates a key at `~/.navia/key` — zero setup. Set **`NAVIA_SECRET`** to use your own passphrase instead (stronger: the key never touches disk; ideal for shared machines).
 
 ### Credentials and 2FA without exposing them to the AI
 Store passwords / 2FA in an encrypted vault; the AI **uses** them by key but **never sees the value**:
@@ -90,7 +90,7 @@ navia secret set occ.password      # prompts for the password without showing it
 navia secret totp occ.2fa          # prompts for the TOTP secret (base32 from your authenticator)
 navia secret list                  # lists keys (no values)
 ```
-Then, in a task, the AI uses `fill_credential(ref, "occ.password")` and `fill_totp(ref, "occ.2fa")` — the real value is injected locally, outside the prompt. (Encrypted with `NAVIA_SECRET`.)
+Then, in a task, the AI uses `fill_credential(ref, "occ.password")` and `fill_totp(ref, "occ.2fa")` — the real value is injected locally, outside the prompt. The vault is **encrypted by default** (auto-managed key, or your `NAVIA_SECRET`). Tip: the interactive `navia start` wizard asks for the password and stores it for you — no manual setup.
 
 ## 🔌 As an MCP server (Claude Desktop / Code / Cursor)
 

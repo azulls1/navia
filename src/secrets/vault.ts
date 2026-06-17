@@ -6,6 +6,7 @@
  * Reusa el cifrado de session-store (AES-256-GCM). Vive en ~/.navia/vault.json.
  */
 import { encryptJSON, decryptJSON, type EncryptedBlob } from "../browser/session-store.js";
+import { resolveSecret } from "./key.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,17 +25,21 @@ async function read(): Promise<VaultData> {
   if (!raw) return { secrets: {}, totp: {} };
   const payload = JSON.parse(raw) as EncryptedBlob | { enc: false; data: VaultData };
   if (payload.enc) {
-    const secret = process.env.NAVIA_SECRET;
-    if (!secret) throw new Error("El vault está cifrado; define NAVIA_SECRET para usarlo.");
-    return decryptJSON(payload, secret) as VaultData;
+    try {
+      return decryptJSON(payload, resolveSecret()) as VaultData;
+    } catch {
+      throw new Error(
+        "No pude descifrar el vault. Si lo creaste con un NAVIA_SECRET distinto, define el mismo; " +
+          "si borraste ~/.navia/key, el vault anterior ya no es recuperable.",
+      );
+    }
   }
-  return payload.data;
+  return payload.data; // formato legado en claro → se re-cifra en el próximo write
 }
 
 async function write(data: VaultData): Promise<void> {
   await mkdir(path.dirname(vaultFile()), { recursive: true });
-  const secret = process.env.NAVIA_SECRET;
-  const payload = secret ? encryptJSON(data, secret) : { enc: false as const, data };
+  const payload = encryptJSON(data, resolveSecret()); // cifrado siempre (transparente)
   await writeFile(vaultFile(), JSON.stringify(payload), "utf8");
 }
 

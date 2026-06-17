@@ -7,6 +7,7 @@
  * en ambos casos vive en ~/.navia/profiles y está cubierto por .gitignore.
  */
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { resolveSecret } from "../secrets/key.js";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -58,10 +59,9 @@ export function profilesDir(): string {
 export async function saveSession(name: string, state: unknown): Promise<{ file: string; encrypted: boolean }> {
   await mkdir(profilesDir(), { recursive: true });
   const file = path.join(profilesDir(), `${name}.json`);
-  const secret = process.env.NAVIA_SECRET;
-  const payload: EncryptedBlob | PlainBlob = secret ? encryptJSON(state, secret) : { enc: false, data: state };
+  const payload: EncryptedBlob = encryptJSON(state, resolveSecret()); // cifrado siempre (transparente)
   await writeFile(file, JSON.stringify(payload), "utf8");
-  return { file, encrypted: !!secret };
+  return { file, encrypted: true };
 }
 
 /** Carga el storageState de un perfil, o null si no existe. */
@@ -71,9 +71,14 @@ export async function loadSession(name: string): Promise<unknown | null> {
   if (!raw) return null;
   const payload = JSON.parse(raw) as EncryptedBlob | PlainBlob;
   if (payload.enc) {
-    const secret = process.env.NAVIA_SECRET;
-    if (!secret) throw new Error(`El perfil "${name}" está cifrado; define NAVIA_SECRET para usarlo.`);
-    return decryptJSON(payload, secret);
+    try {
+      return decryptJSON(payload, resolveSecret());
+    } catch {
+      throw new Error(
+        `No pude descifrar el perfil "${name}". Si lo creaste con un NAVIA_SECRET distinto, define el mismo; ` +
+          "si borraste ~/.navia/key, vuelve a crear el perfil con 'navia login'.",
+      );
+    }
   }
   return payload.data;
 }
