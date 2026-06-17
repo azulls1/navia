@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.10.2");
+  .version("0.11.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -106,6 +106,91 @@ async function runTask(task: string, flags: RunFlags) {
   }
 }
 
+/** Banner ASCII de bienvenida (solo en modo interactivo, no en --json/CI). */
+function banner(): string {
+  const art = [
+    "   ███╗   ██╗ █████╗ ██╗   ██╗██╗ █████╗ ",
+    "   ████╗  ██║██╔══██╗██║   ██║██║██╔══██╗",
+    "   ██╔██╗ ██║███████║██║   ██║██║███████║",
+    "   ██║╚██╗██║██╔══██║╚██╗ ██╔╝██║██╔══██║",
+    "   ██║ ╚████║██║  ██║ ╚████╔╝ ██║██║  ██║",
+    "   ╚═╝  ╚═══╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═╝",
+  ].join("\n");
+  return pc.cyan(art) + pc.dim(`\n   Agente de navegador con IA · v${program.version()}\n`);
+}
+
+/**
+ * Modo interactivo: da la bienvenida y pregunta todo lo necesario (URL, login,
+ * tarea, motor, proveedor), guarda la contraseña en el vault cifrado y ejecuta.
+ * Se lanza con `navia` sin tarea, o con `navia start`.
+ */
+async function runWizard(base: Partial<RunFlags>): Promise<void> {
+  console.log("\n" + banner());
+  console.log(pc.bold("\n ¡Bienvenido! Te hago unas preguntas para preparar la tarea.") + pc.dim("\n (Enter para el valor por defecto entre corchetes)\n"));
+
+  let rl = createInterface({ input, output });
+  const ask = async (q: string, def?: string): Promise<string> => {
+    const hint = def ? pc.dim(` [${def}]`) : "";
+    const a = (await rl.question(pc.cyan(q) + hint + " ")).trim();
+    return a || def || "";
+  };
+
+  try {
+    const startUrl = await ask("🌐 ¿URL de inicio?");
+    const wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
+
+    let user = "";
+    let secretKey = "";
+    if (wantsLogin) {
+      user = await ask("   👤 Usuario");
+      rl.close(); // promptHidden toma control de stdin; cierra readline antes.
+      const pass = await promptHidden(pc.cyan("   🔑 Contraseña (no se muestra): "));
+      secretKey = "wizard-login";
+      await setSecret(secretKey, pass);
+      if (process.env.NAVIA_SECRET) console.log(pc.green(`   ✓ Contraseña guardada cifrada como "${secretKey}".`));
+      else console.log(pc.yellow("   ⚠️  Sin NAVIA_SECRET la contraseña se guardó EN CLARO en ~/.navia/vault.json. Define NAVIA_SECRET para cifrarla."));
+      rl = createInterface({ input, output });
+    }
+
+    const taskPrompt = await ask("🧠 ¿Qué quieres que haga?");
+    if (!taskPrompt) {
+      console.log(pc.red("\n✗ Necesito una instrucción para continuar."));
+      return;
+    }
+    const browser = (await ask("🖥️  Motor (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
+    const provider = (await ask("⚙️  Proveedor IA (auto|api|claude-cli)", base.provider ?? "auto")) as RunFlags["provider"];
+
+    // Arma la tarea: si hay login, instruye usar fill_credential (la contraseña nunca pasa por el modelo).
+    const task = wantsLogin
+      ? `Primero inicia sesión: el usuario es "${user}"; para la contraseña usa fill_credential(ref, "${secretKey}") (NUNCA la teclees tú). Luego: ${taskPrompt}`
+      : taskPrompt;
+
+    // Vista previa del comando equivalente.
+    const eq =
+      `navia run ${JSON.stringify(taskPrompt)} --browser ${browser}` +
+      (startUrl ? ` --start-url ${startUrl}` : "") +
+      (provider && provider !== "auto" ? ` --provider ${provider}` : "");
+    console.log(pc.dim("\n ─────────────────────────────────────────────"));
+    console.log(" Voy a ejecutar:\n   " + pc.cyan(eq));
+
+    const go = await ask("\n▶ ¿Confirmas? (S/n)", "S");
+    rl.close();
+    if (!/^(s|y)/i.test(go)) {
+      console.log(pc.dim("Cancelado."));
+      return;
+    }
+
+    await runTask(task, {
+      ...base,
+      browser,
+      provider,
+      startUrl: startUrl || base.startUrl,
+    } as RunFlags);
+  } finally {
+    rl.close();
+  }
+}
+
 const browserOpt = (cmd: Command) =>
   cmd
     .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
@@ -130,12 +215,61 @@ browserOpt(
     .description("Ejecutar una tarea (comando por defecto)")
     .argument("[task]", "qué hacer, en lenguaje natural"),
 ).action((task: string | undefined, flags: RunFlags) => {
-  if (!task) {
-    program.help();
-    return;
-  }
+  // Sin tarea → modo interactivo (bienvenida + preguntas guiadas).
+  if (!task) return runWizard(flags);
   return runTask(task, flags);
 });
+
+// `navia start` — modo interactivo explícito (bienvenida + preguntas).
+browserOpt(program.command("start").description("Modo interactivo guiado: bienvenida y preguntas (URL, login, tarea, motor)…")).action(
+  (flags: RunFlags) => runWizard(flags),
+);
+
+// `navia extract` — extracción estructurada y tipada (web → JSON conforme a un schema).
+program
+  .command("extract [instruccion]")
+  .description("Extraer datos estructurados de una página a JSON validado contra un schema (web → datos).")
+  .option("--url <url>", "URL a abrir antes de extraer")
+  .option("--schema <archivo>", "archivo .json con el schema JSON deseado")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-p, --profile <name>", "perfil guardado con 'navia login'")
+  .option("-m, --model <model>", "modelo de Claude")
+  .option("--headless", "ejecutar sin ventana visible")
+  .action(async (instruccion: string | undefined, opts: { url?: string; schema?: string; browser: BrowserEngine; profile?: string; model?: string; headless?: boolean }) => {
+    if (!instruccion || !opts.schema) {
+      console.error(pc.red("✗ Uso: navia extract \"qué extraer\" --schema schema.json [--url https://...]"));
+      process.exit(1);
+    }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.error(pc.red("✗ extract necesita ANTHROPIC_API_KEY (usa una API key; no funciona con el proveedor CLI)."));
+      process.exit(1);
+    }
+    const { readFile } = await import("node:fs/promises");
+    const { extract } = await import("./agent/extract.js");
+    let schema: Record<string, any>;
+    try {
+      schema = JSON.parse(await readFile(opts.schema, "utf8"));
+    } catch (e) {
+      console.error(pc.red(`✗ No pude leer/parsear el schema "${opts.schema}": ${(e as Error).message}`));
+      process.exit(1);
+    }
+    console.log(pc.cyan(`\n🔎 Navia extract — ${opts.url ?? "(página actual)"}\n`) + pc.dim(`Extraer: ${instruccion}\n`));
+    try {
+      const data = await extract({
+        instruction: instruccion,
+        schema,
+        url: opts.url,
+        browser: opts.browser,
+        profile: opts.profile,
+        model: opts.model,
+        headless: opts.headless,
+      });
+      console.log(JSON.stringify(data, null, 2));
+    } catch (err) {
+      console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
 
 // `navia replay <archivo>` — re-ejecuta una macro grabada con --record, sin LLM.
 program

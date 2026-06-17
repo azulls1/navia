@@ -45,6 +45,11 @@ Run `navia doctor` anytime to check your environment is ready.
 ## 🚀 Usage (CLI)
 
 ```bash
+# Interactive mode (welcome + guided questions): just run `navia` with no task, or:
+navia start
+# It asks for the start URL, login (username + hidden password → encrypted vault),
+# the task, the browser engine and the AI provider, then confirms and runs.
+
 # Default browser (Chromium)
 navia "search 't-shirts' on example-shop.com and list the first 5 products with prices"
 
@@ -129,6 +134,35 @@ navia "sign in and download this month's invoice" --record ./invoice.jsonl   # r
 navia replay ./invoice.jsonl --profile my-portal                              # replay, no AI
 ```
 Ideal for validated, repetitive flows. Secrets aren't stored in the macro: `fill_credential`/`fill_totp` are re-injected fresh from the vault on each replay.
+
+## 🧱 Structured extraction (web → typed JSON)
+
+Extract structured, schema-validated data from a page. Navia forces the model to answer through a tool whose schema **is** your schema, so the result always matches (with a retry otherwise). Requires an API key.
+
+```bash
+# schema.json describes the shape you want
+navia extract "the first 5 products with name and price" \
+  --url https://example-shop.com --schema ./schema.json
+```
+
+```ts
+import { extract } from "navia-ai";
+
+const data = await extract({
+  url: "https://news.example.com",
+  instruction: "the top 5 headlines with title and points",
+  schema: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: { type: "object", properties: { title: { type: "string" }, points: { type: "number" } }, required: ["title"] },
+      },
+    },
+    required: ["items"],
+  },
+});
+```
 
 ## 🧑‍💻 Usage (library)
 
