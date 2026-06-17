@@ -16,8 +16,10 @@ npx navia-ai "open example.com and tell me what the page is about"
 - 🦊 **Real Chrome or Firefox**, your choice.
 - 🛡️ **Anti-Cloudflare built in.** `--browser chrome` mode connects via **CDP to a real Chrome** → `navigator.webdriver=false` → passes the "Just a moment…" wall. Not evasion: it's your own browser.
 - 👁️ **Reads like a human:** accessibility tree (not pixels) + screenshots for visual verification.
-- 🧩 **Bulk extraction** with JavaScript (lists → JSON).
-- 🔐 **Secure by design:** asks for confirmation before irreversible actions (submit, pay, delete) and hands you the window for login / captcha / 2FA.
+- 🧩 **Bulk extraction** with JavaScript (lists → JSON), plus a **typed `extract`** primitive (schema-validated output).
+- 💬 **Conversation mode:** keeps the browser & session open and takes follow-up commands — log in once, keep going.
+- 🪄 **Zero-setup interactive wizard** (`navia start`): a welcome banner asks everything (engine, URL, login, task, journal location).
+- 🔐 **Secure by design:** credential vault (passwords/2FA used but never seen by the model), **encrypted by default**; asks for confirmation before irreversible actions and hands you the window for login / captcha / 2FA.
 - 📦 **CLI + library** (TypeScript, ESM) **+ MCP server**.
 
 ## 📦 Installation
@@ -47,11 +49,19 @@ Run `navia doctor` anytime to check your environment is ready.
 ```bash
 # Interactive mode (welcome + guided questions): just run `navia` with no task, or:
 navia start
-# It asks for the start URL, login (username + hidden password → encrypted vault),
-# the task, the browser engine and the AI provider, then confirms and runs.
+# Guided flow: AI engine (auto-detected: API key, or your `claude`/`ant` CLI; asks for a
+# key only if none) → start URL → login (username + hidden password → encrypted vault) →
+# task → browser engine → where to save the journal (detects your Obsidian vaults).
+# It's CONVERSATIONAL: after each task it keeps the browser + session open and asks
+# "what now?" so you can keep issuing commands without logging in again.
+# Tip: if run inside another agent (Claude Code, etc., no real terminal) it won't hang —
+# it points you to MCP mode instead.
 
 # Default browser (Chromium)
 navia "search 't-shirts' on example-shop.com and list the first 5 products with prices"
+
+# Conversation mode for a one-off task too (stays open, asks for the next):
+navia run "explore this site and map its sections" --browser firefox --chat
 
 # Firefox
 navia run "go to my-portal.com, sign in, and download my latest invoice" --browser firefox
@@ -89,6 +99,7 @@ Store passwords / 2FA in an encrypted vault; the AI **uses** them by key but **n
 navia secret set occ.password      # prompts for the password without showing it
 navia secret totp occ.2fa          # prompts for the TOTP secret (base32 from your authenticator)
 navia secret list                  # lists keys (no values)
+navia secret reset                 # start fresh — backs up the current vault to .bak (never deletes)
 ```
 Then, in a task, the AI uses `fill_credential(ref, "occ.password")` and `fill_totp(ref, "occ.2fa")` — the real value is injected locally, outside the prompt. The vault is **encrypted by default** (auto-managed key, or your `NAVIA_SECRET`). Tip: the interactive `navia start` wizard asks for the password and stores it for you — no manual setup.
 
