@@ -1,9 +1,17 @@
 name: Release & Publish
 
 # Publica `navia-ai` en npm cuando publicas un Release en GitHub.
-# Usa Trusted Publishing (OIDC): NO necesita NPM_TOKEN.
-# Requisito (una sola vez): en npmjs.com → paquete navia-ai → Settings → Publishing access
-#   → "Trusted Publisher" → GitHub Actions, repo azulls1/navia, workflow release.yml.
+# Usa Trusted Publishing (OIDC): NO necesita NPM_TOKEN ni códigos 2FA.
+#
+# Requisito (UNA sola vez) en npmjs.com:
+#   1. Entra a https://www.npmjs.com/package/navia-ai → pestaña "Settings".
+#   2. Sección "Trusted Publisher" → "GitHub Actions".
+#   3. Rellena:  Organization or user = azulls1 · Repository = navia
+#                Workflow filename = release.yml · (Environment: vacío)
+#   4. Guarda. A partir de ahí, crear un Release en GitHub publica solo, con provenance.
+#
+# Nota: el publish necesita 2FA en modo "auth-only" (no "auth and writes") para que el
+# OIDC del CI pueda publicar sin código. Cámbialo en npmjs.com → Account → Two-Factor.
 
 on:
   release:
@@ -30,6 +38,16 @@ jobs:
         run: npm install -g npm@latest
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
+      # Verifica que la versión del tag (vX.Y.Z) coincida con package.json antes de publicar.
+      - name: Verificar versión del tag
+        if: github.event_name == 'release'
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::El tag ($TAG) no coincide con package.json ($PKG)"; exit 1
+          fi
       - name: Publicar (provenance + OIDC, sin token)
         run: npm publish
