@@ -37,29 +37,41 @@ function slugify(task: string): string {
 }
 
 /**
- * Busca un vault de Obsidian para guardar ahí el workspace (memoria persistente).
- * Genérico: respeta $NAVIA_OBSIDIAN, o escanea ~/Documents y ~ buscando cualquier carpeta
- * que contenga `.obsidian` (la firma de un vault). No hardcodea nombres personales.
+ * Detecta vaults de Obsidian en el equipo (puede haber varios). Genérico y portátil:
+ * respeta $NAVIA_OBSIDIAN, y escanea ~/Documents, ~ y ~/Obsidian buscando cualquier
+ * carpeta con `.obsidian` (la firma de un vault). No hardcodea nombres ni rutas personales.
  */
-function findObsidianBase(): string | null {
-  if (process.env.NAVIA_OBSIDIAN && existsSync(process.env.NAVIA_OBSIDIAN)) return process.env.NAVIA_OBSIDIAN;
+export function detectObsidianVaults(): string[] {
+  const found: string[] = [];
+  if (process.env.NAVIA_OBSIDIAN && existsSync(process.env.NAVIA_OBSIDIAN)) found.push(process.env.NAVIA_OBSIDIAN);
   const home = os.homedir();
   const roots = [path.join(home, "Documents"), home, path.join(home, "Obsidian")];
   for (const root of roots) {
     if (!existsSync(root)) continue;
-    // ¿El propio root es un vault?
-    if (existsSync(path.join(root, ".obsidian"))) return root;
-    // ¿Algún hijo directo es un vault?
+    if (existsSync(path.join(root, ".obsidian"))) found.push(root); // el propio root es un vault
     try {
       for (const name of readdirSync(root)) {
         const child = path.join(root, name);
-        if (existsSync(path.join(child, ".obsidian"))) return child;
+        if (existsSync(path.join(child, ".obsidian"))) found.push(child); // un hijo directo es un vault
       }
     } catch {
       /* sin permisos de lectura → siguiente */
     }
   }
-  return null;
+  return [...new Set(found)];
+}
+
+/** Base sensata para crear una carpeta en CUALQUIER equipo: Escritorio → Documentos → home. */
+export function defaultWorkspaceBase(): string {
+  const home = os.homedir();
+  for (const c of [path.join(home, "Desktop"), path.join(home, "Documents")]) {
+    if (existsSync(c)) return c;
+  }
+  return home;
+}
+
+function findObsidianBase(): string | null {
+  return detectObsidianVaults()[0] ?? null;
 }
 
 async function resolveBase(explicit?: string): Promise<{ base: string; where: string }> {

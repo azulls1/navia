@@ -12,6 +12,7 @@ import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { loadSession } from "../browser/session-store.js";
 import { createRecorder, preview } from "./trajectory.js";
+import { createWorkspace } from "./workspace.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -147,7 +148,18 @@ export class BrowserAgent {
 
       const model = this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL;
       const maxSteps = this.opts.maxSteps ?? 60;
-      const recorder = createRecorder(this.opts.record);
+      // Workspace = carpeta-bitácora (memoria) por tarea; si se pide, la grabación va también allí.
+      let ws: Awaited<ReturnType<typeof createWorkspace>>["ws"] | undefined;
+      if (this.opts.workspace) {
+        const created = await createWorkspace(
+          this.opts.task,
+          new Date().toISOString(),
+          typeof this.opts.workspace === "string" ? { dir: this.opts.workspace } : undefined,
+        );
+        ws = created.ws;
+        this.hooks.log?.(`🧠 Workspace: ${ws.dir}  [${created.where}]`);
+      }
+      const recorder = createRecorder(this.opts.record, undefined, ws);
       if (recorder.path) this.hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
       await recorder.log({ type: "start", task: this.opts.task, engine, model: this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL, provider: "api" });
       const system = buildSystemPrompt(this.opts.systemExtra);

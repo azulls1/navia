@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.11.0");
+  .version("0.12.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -49,7 +49,46 @@ interface RunFlags {
   workspace?: boolean | string;
 }
 
+/**
+ * Pregunta al inicio DÓNDE guardar la bitácora/memoria. Portátil: las opciones se
+ * construyen en runtime según el equipo (vaults de Obsidian detectados, base por
+ * defecto del SO, o una ruta a mano). Devuelve la carpeta base elegida.
+ */
+async function chooseWorkspace(): Promise<string | undefined> {
+  const { detectObsidianVaults, defaultWorkspaceBase } = await import("./agent/workspace.js");
+  const vaults = detectObsidianVaults();
+  const folderBase = defaultWorkspaceBase();
+  const rl = createInterface({ input, output });
+  try {
+    console.log(pc.cyan("\n🧠 ¿Dónde guardo la bitácora/memoria de esta tarea?"));
+    const choices: string[] = [];
+    console.log(`  ${choices.length + 1}) Crear carpeta en  ${pc.dim(path.join(folderBase, "Navia Runs"))}`);
+    choices.push(path.join(folderBase, "Navia Runs"));
+    for (const v of vaults) {
+      console.log(`  ${choices.length + 1}) Vault de Obsidian ${pc.dim(path.join(v, "Navia Runs"))}`);
+      choices.push(path.join(v, "Navia Runs"));
+    }
+    const customIdx = choices.length + 1;
+    console.log(`  ${customIdx}) Ruta personalizada…`);
+    const ans = (await rl.question(pc.cyan(`Elige [1-${customIdx}] (Enter=1): `))).trim();
+    const n = ans ? Number.parseInt(ans, 10) : 1;
+    if (n === customIdx) {
+      const custom = (await rl.question(pc.cyan("Escribe la ruta donde guardar: "))).trim();
+      return custom || choices[0];
+    }
+    return choices[n - 1] ?? choices[0];
+  } finally {
+    rl.close();
+  }
+}
+
 async function runTask(task: string, flags: RunFlags) {
+  // Si pidió --workspace SIN ruta y estamos en terminal interactiva (y sin $NAVIA_WORKSPACE),
+  // pregunta dónde guardar (carpeta nueva, vault de Obsidian, o ruta a mano).
+  if (flags.workspace === true && process.stdin.isTTY && !process.env.NAVIA_WORKSPACE) {
+    flags.workspace = await chooseWorkspace();
+  }
+
   const provider = resolveProvider({ task, provider: flags.provider, apiKey: undefined });
   if (provider === "api" && !process.env.ANTHROPIC_API_KEY) {
     console.error(pc.red("✗ Provider 'api' sin ANTHROPIC_API_KEY. Pon la key, usa --provider claude-cli, o instala el CLI `claude`."));

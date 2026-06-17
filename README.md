@@ -65,7 +65,7 @@ navia "..." --headless           # no visible window
 navia "..." --slow-mo 300        # go slow (anti rate-limit)
 navia "..." --start-url https://...   # open a URL before starting
 navia "..." --model claude-opus-4-8   # another model
-navia "..." --workspace          # write a per-task log/brain folder (Obsidian/Desktop)
+navia "..." --workspace          # per-task log/brain folder — asks where to save (new folder, detected Obsidian vault, or custom path)
 ```
 
 During a run:
