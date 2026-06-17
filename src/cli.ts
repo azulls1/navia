@@ -30,7 +30,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.13.0");
+  .version("0.14.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -93,6 +93,16 @@ async function runTask(task: string, flags: RunFlags) {
   if (provider === "api" && !process.env.ANTHROPIC_API_KEY) {
     console.error(pc.red("✗ Provider 'api' sin ANTHROPIC_API_KEY. Pon la key, usa --provider claude-cli, o instala el CLI `claude`."));
     process.exit(1);
+  }
+  if (provider === "claude-cli") {
+    const bin = flags.cliCommand ?? "claude";
+    if (!(await cmdExists(bin))) {
+      console.error(
+        pc.red(`✗ No hay motor de IA: el CLI "${bin}" no está instalado y no hay ANTHROPIC_API_KEY.`) +
+          pc.dim("\n  Soluciones: define ANTHROPIC_API_KEY (--provider api), instala el CLI 'claude'/'ant', o pásalo con --cli-command."),
+      );
+      process.exit(1);
+    }
   }
 
   const rl = createInterface({ input, output });
@@ -163,9 +173,52 @@ function banner(): string {
  * tarea, motor, proveedor), guarda la contraseña en el vault cifrado y ejecuta.
  * Se lanza con `navia` sin tarea, o con `navia start`.
  */
+/** Detecta si Navia corre DENTRO de otra IA/agente (Claude Code, OpenCode, Cursor…). */
+function detectAgentHost(): string | null {
+  if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return "Claude Code";
+  if (process.env.OPENCODE || process.env.OPENCODE_BIN) return "OpenCode";
+  if (process.env.OPENCLAW) return "OpenClaw";
+  if (process.env.CURSOR_AGENT || process.env.CURSOR_TRACE_ID) return "Cursor";
+  return null;
+}
+
+/**
+ * Garantiza que haya un motor de IA. Si ya hay API key o un CLI (claude/ant) → ok.
+ * Si NO hay nada, en terminal interactiva pide una API key para poder funcionar.
+ */
+async function ensureEngine(): Promise<void> {
+  if (process.env.ANTHROPIC_API_KEY) return;
+  const [hasClaude, hasAnt] = await Promise.all([cmdExists("claude"), cmdExists("ant")]);
+  if (hasClaude || hasAnt) return; // el CLI ya es motor (sin key)
+
+  console.log(pc.yellow("\n⚠️  No detecté un motor de IA: ni ANTHROPIC_API_KEY, ni el CLI 'claude'/'ant'."));
+  console.log(pc.dim("Navia necesita un LLM para razonar. Pega una API key de Anthropic para continuar (o cancela e instala el CLI 'claude')."));
+  const key = (await promptHidden(pc.cyan("🔑 ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "))).trim();
+  if (!key) throw new Error("Sin motor de IA no puedo continuar. Define ANTHROPIC_API_KEY o instala el CLI 'claude'/'ant'.");
+  process.env.ANTHROPIC_API_KEY = key;
+  console.log(
+    pc.green("✓ API key cargada para esta sesión.") +
+      pc.dim(' Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…" (o ponla en un archivo .env).'),
+  );
+}
+
 async function runWizard(base: Partial<RunFlags>): Promise<void> {
+  // No-interactivo (lo ejecuta otra IA/agente o un pipe): el wizard no puede pedir datos → no colgar.
+  if (!process.stdin.isTTY) {
+    const host = detectAgentHost();
+    console.error(pc.yellow(`\n⚠️  Modo interactivo no disponible${host ? ` (detecté: ${host})` : " (no hay terminal interactiva)"}.`));
+    console.error(pc.dim("El wizard necesita una terminal real para hacerte preguntas. Opciones:\n"));
+    console.error(pc.cyan("  • En una terminal real:    ") + 'npx navia-ai start');
+    console.error(pc.cyan("  • Dentro de una IA (MCP):  ") + "npx navia-ai mcp" + pc.dim("   (añádelo a tu cliente MCP)"));
+    console.error(pc.cyan("  • Sin preguntas (flags):   ") + 'npx navia-ai run "tu tarea" --start-url https://… --browser firefox');
+    process.exitCode = 1;
+    return;
+  }
+
   console.log("\n" + banner());
   console.log(pc.bold("\n ¡Bienvenido! Te hago unas preguntas para preparar la tarea.") + pc.dim("\n (Enter para el valor por defecto entre corchetes)\n"));
+
+  await ensureEngine(); // si no hay motor de IA, pide API key antes de seguir
 
   let rl = createInterface({ input, output });
   const ask = async (q: string, def?: string): Promise<string> => {
