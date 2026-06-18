@@ -13,6 +13,7 @@ import { Command } from "commander";
 import { config as loadEnv } from "dotenv";
 import pc from "picocolors";
 import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents } from "node:readline";
 import { stdin as input, stdout as output } from "node:process";
 import { runNavia, resolveProvider } from "./agent/agent.js";
 import { BrowserDriver } from "./browser/driver.js";
@@ -44,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.22.1");
+  .version("0.22.2");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -118,6 +119,35 @@ function askHidden(rl: ReturnType<typeof createInterface>, query: string): Promi
     process.stdin.removeListener("data", onData);
     return v.trim();
   });
+}
+
+/**
+ * Hace que pulsar ESC salga de Navia limpiamente mientras se responden los prompts del wizard.
+ * Usa los eventos `keypress` que readline ya emite en modo terminal. Devuelve un detach() para
+ * dejar de escuchar (p.ej. antes de lanzar la tarea, para no cortar una sesión con navegador).
+ */
+function attachEscToExit(rl: ReturnType<typeof createInterface>): () => void {
+  if (!input.isTTY) return () => {};
+  emitKeypressEvents(input);
+  const onKey = (_s: string, key: { name?: string } | undefined): void => {
+    if (key?.name === "escape") {
+      input.removeListener("keypress", onKey);
+      output.write(pc.dim("\n\n👋 Saliendo de Navia (ESC).\n"));
+      try {
+        rl.close();
+      } catch {
+        /* noop */
+      }
+      try {
+        input.setRawMode?.(false);
+      } catch {
+        /* noop */
+      }
+      process.exit(0);
+    }
+  };
+  input.on("keypress", onKey);
+  return () => input.removeListener("keypress", onKey);
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -273,9 +303,10 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
   }
 
   console.log("\n" + banner());
-  console.log(pc.bold("\n ¡Bienvenido! Te hago unas preguntas para preparar la tarea.") + pc.dim("\n (Enter para el valor por defecto entre corchetes)\n"));
+  console.log(pc.bold("\n ¡Bienvenido! Te hago unas preguntas para preparar la tarea.") + pc.dim("\n (Enter para el valor por defecto entre corchetes · ESC para salir)\n"));
 
   let rl = createInterface({ input, output });
+  const detachEsc = attachEscToExit(rl); // ESC sale de Navia mientras se responden las preguntas
   const ask = async (q: string, def?: string): Promise<string> => {
     const hint = def ? pc.dim(` [${def}]`) : "";
     const a = (await rl.question(pc.cyan(q) + hint + " ")).trim();
@@ -373,6 +404,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     console.log(" Voy a ejecutar:\n   " + pc.cyan(eq));
 
     const go = await ask("\n▶ ¿Confirmas? (S/n)", "S");
+    detachEsc(); // a partir de aquí arranca la tarea (posible navegador) → ya no cortamos con ESC
     rl.close();
     if (!/^(s|y)/i.test(go)) {
       console.log(pc.dim("Cancelado."));
@@ -389,6 +421,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       startUrl: startUrl || base.startUrl,
     } as RunFlags);
   } finally {
+    detachEsc();
     rl.close();
   }
 }

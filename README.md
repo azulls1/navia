@@ -27,7 +27,7 @@ npx navia-ai "open example.com and tell me what the page is about"
 - 🩹 **Self-healing replay:** deterministic macros that re-locate elements when a site drifts, and re-cache the fixed macro.
 - 📊 **Reliability metrics + `navia eval`:** measures steps, tokens, recoveries, loops; judges runs against a task dataset with an LLM judge.
 - 💬 **Conversation mode:** keeps the browser & session open and takes follow-up commands — log in once, keep going.
-- 🪄 **Zero-setup wizard** (`navia start`) + **persistent config** (`navia init`) + project **scaffolding** (`navia create`).
+- 🪄 **Zero-setup wizard** (`navia start`, press **ESC to quit** anytime) + **persistent config** (`navia init`) + project **scaffolding** (`navia create`).
 - 🔐 **Secure by design:** credential vault (passwords/2FA used but never seen by the model), **encrypted by default**, **domain-bound** (a secret only fills on its allowed origin — anti-phishing); prompt-injection **spotlighting**, `evaluate` gating (`--no-eval`) and a network **allow-list** (`--allow-domain`). Asks for confirmation before irreversible actions; hands you the window for login / captcha / 2FA.
 - 📦 **CLI + library** (TypeScript, ESM) **+ MCP server** (with secure credential **elicitation**).
 
