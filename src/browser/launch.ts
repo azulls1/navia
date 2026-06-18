@@ -117,6 +117,7 @@ async function connectChromeCdp(opts: LaunchOptions): Promise<BrowserSession> {
         `--user-data-dir=${dataDir}`,
         "--no-first-run",
         "--no-default-browser-check",
+        "--start-maximized",
         ...CHROMIUM_STEALTH_ARGS,
       ],
       { detached: true, stdio: "ignore" },
@@ -151,10 +152,12 @@ async function launchPatchright(opts: LaunchOptions): Promise<BrowserSession> {
     );
   }
   const dataDir = opts.userDataDir ?? path.join(os.homedir(), ".navia", "patchright-profile");
+  const headless = opts.headless ?? false;
   const base = {
-    headless: opts.headless ?? false,
-    viewport: { width: 1366, height: 900 },
+    headless,
+    viewport: headless ? { width: 1920, height: 1080 } : null, // ventana real con visible
     slowMo: opts.slowMo ?? 0,
+    args: headless ? [] : ["--start-maximized"],
   };
   let context;
   try {
@@ -178,10 +181,16 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
   // Endurecimiento básico anti-bot (señales JS clásicas). NO elimina el leak de
   // Runtime.enable (eso requiere snapshot CDP / Patchright; ver roadmap), pero quita
   // las banderas de automatización más baratas de detectar.
+  const headless = opts.headless ?? false;
+  // Con ventana visible (chromium) usamos la VENTANA REAL maximizada (viewport=null) en vez de
+  // un viewport fijo: muchas páginas responsivas se rompen si el viewport no coincide con la
+  // ventana (la tarjeta de login queda fuera, no aplica el layout). Así se ve como un Chrome
+  // normal. En headless (no hay ventana) usamos un viewport grande y estándar (1920×1080).
+  const realWindow = opts.engine !== "firefox" && !headless;
   let browser: Browser;
   if (opts.engine === "firefox") {
     browser = await firefox.launch({
-      headless: opts.headless ?? false,
+      headless,
       slowMo: opts.slowMo ?? 0,
       firefoxUserPrefs: {
         "dom.webdriver.enabled": false,
@@ -190,9 +199,9 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
     });
   } else {
     const chromiumArgs = {
-      headless: opts.headless ?? false,
+      headless,
       slowMo: opts.slowMo ?? 0,
-      args: CHROMIUM_STEALTH_ARGS,
+      args: [...CHROMIUM_STEALTH_ARGS, ...(realWindow ? ["--start-maximized"] : [])],
       ignoreDefaultArgs: ["--enable-automation"],
     };
     try {
@@ -204,7 +213,7 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
     }
   }
   const context = await browser.newContext({
-    viewport: { width: 1366, height: 900 },
+    viewport: realWindow ? null : { width: 1920, height: 1080 },
     storageState: (opts.storageState as any) ?? undefined,
     acceptDownloads: true,
   });
