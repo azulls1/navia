@@ -456,7 +456,29 @@ export class BrowserDriver {
       await this.page.getByText(opts.textGone, { exact: false }).first().waitFor({ state: "hidden", timeout: 30000 });
   }
 
-  async screenshot(): Promise<string> {
+  /** Captura PNG (base64). Con `ref` recorta SOLO ese elemento (útil para leer un captcha). */
+  async screenshot(ref?: string): Promise<string> {
+    if (ref && this.refMode === "cdp" && this.cdp) {
+      try {
+        const { session, objectId } = await this.resolveRef(ref);
+        const res = (await session.send("Runtime.callFunctionOn", {
+          objectId,
+          functionDeclaration:
+            "function(){ this.scrollIntoView({block:'center'}); const r=this.getBoundingClientRect(); return {x:r.x+window.scrollX, y:r.y+window.scrollY, width:r.width, height:r.height}; }",
+          returnByValue: true,
+        } as any)) as any;
+        const r = res?.result?.value;
+        if (r && r.width > 1 && r.height > 1) {
+          const buf = await this.page.screenshot({
+            type: "png",
+            clip: { x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) },
+          });
+          return buf.toString("base64");
+        }
+      } catch {
+        /* si no se puede recortar, cae a la captura completa */
+      }
+    }
     const buf = await this.page.screenshot({ type: "png", fullPage: false });
     return buf.toString("base64");
   }

@@ -73,8 +73,12 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
   },
   {
     name: "screenshot",
-    description: "Tomar una captura de imagen de la página para verla con visión.",
-    input_schema: { type: "object", properties: {} },
+    description:
+      "Tomar una captura de imagen para verla con visión. Pasa `ref` para capturar SOLO ese elemento (p.ej. la imagen del captcha) y leer su contenido con más precisión; sin `ref` captura la página.",
+    input_schema: {
+      type: "object",
+      properties: { ref: { type: "string", description: "ref del elemento a capturar (opcional; ej. la imagen del captcha)" } },
+    },
   },
   {
     name: "click",
@@ -349,7 +353,7 @@ export async function dispatchTool(
       return { text: warn + injectionBanner(snap, "snapshot") + snap };
     }
     case "screenshot":
-      return { imageBase64: await driver.screenshot() };
+      return { imageBase64: await driver.screenshot(input.ref) };
     case "click":
       return wrapAction(driver, async () => {
         await driver.click(input.ref);

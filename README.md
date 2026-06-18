@@ -282,7 +282,7 @@ Your instruction ─► BrowserAgent (tool-use loop with Claude)
 
 ## ⚠️ Responsible use
 
-Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It ships no captcha solvers or stealth tricks: when a human is needed (captcha/2FA), it hands you the window.
+Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It bundles **no third-party captcha-solving services**; for image (text-in-image) captchas on your own login it can try to read them with the model's **own vision** (requires `--provider api`, i.e. an API key), and otherwise hands you the window. For 2FA it hands you the window.
 
 ## 📄 License
 
