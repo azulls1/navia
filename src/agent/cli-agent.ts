@@ -112,7 +112,7 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     storageState,
     allowDomains: opts.allowDomains,
   });
-  const policy: ToolPolicy = { allowEval: opts.allowEval };
+  const policy: ToolPolicy = { allowEval: opts.allowEval, vision: false }; // CLI: solo texto, no ve imágenes
 
   try {
     if (opts.startUrl) await driver.navigate(opts.startUrl);

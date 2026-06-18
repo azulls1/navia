@@ -44,15 +44,22 @@ export interface AgentHooks {
   rememberNote?: (url: string, note: string) => Promise<void>;
 }
 
-/** Política de herramientas: gatea capacidades peligrosas (p.ej. ejecución de JS arbitrario). */
+/** Política de herramientas: gatea capacidades según el entorno (JS arbitrario, visión). */
 export interface ToolPolicy {
   /** Permitir la tool `evaluate` (ejecución de JS). Default true; ponlo en false para sitios hostiles. */
   allowEval?: boolean;
+  /** ¿El proveedor VE imágenes? El provider CLI es solo texto → sin visión, `screenshot` es inútil
+   *  (no puede leer la imagen) y solo provoca bucles; se oculta y se delega lo visual a wait_for_human. */
+  vision?: boolean;
 }
 
 /** Catálogo de tools filtrado según la política (lo que VE el modelo). */
 export function toolDefinitions(policy?: ToolPolicy): Anthropic.Tool[] {
-  return TOOL_DEFINITIONS.filter((t) => (policy?.allowEval === false ? t.name !== "evaluate" : true));
+  return TOOL_DEFINITIONS.filter((t) => {
+    if (policy?.allowEval === false && t.name === "evaluate") return false;
+    if (policy?.vision === false && t.name === "screenshot") return false;
+    return true;
+  });
 }
 
 export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
@@ -335,6 +342,11 @@ export async function dispatchTool(
   hooks.log?.(`→ ${name} ${JSON.stringify(input).slice(0, 160)}`);
   if (name === "evaluate" && policy?.allowEval === false) {
     return { text: "🔒 La tool 'evaluate' está deshabilitada en esta corrida (--no-eval). Usa snapshot/read_text/click/type." };
+  }
+  if (name === "screenshot" && policy?.vision === false) {
+    return {
+      text: "🚫 No puedes ver imágenes en este modo (proveedor CLI = solo texto). NO insistas con screenshot. Para algo visual como un CAPTCHA de imagen, usa wait_for_human para que la persona lo escriba en la ventana. (Para que Navia LEA el captcha solo, hay que usar --provider api con ANTHROPIC_API_KEY.)",
+    };
   }
   switch (name) {
     case "navigate": {

@@ -229,7 +229,7 @@ export class BrowserAgent {
       storageState,
       allowDomains: this.opts.allowDomains,
     });
-    const policy: ToolPolicy = { allowEval: this.opts.allowEval };
+    const policy: ToolPolicy = { allowEval: this.opts.allowEval, vision: true }; // API: el modelo VE imágenes
 
     try {
       if (this.opts.startUrl) await driver.navigate(this.opts.startUrl);
