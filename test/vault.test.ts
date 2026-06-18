@@ -48,4 +48,21 @@ describe("vault cifrado transparente", () => {
     expect(raw).not.toContain("SuperSecreta-123");
     expect(JSON.parse(raw).enc).toBe(true);
   });
+
+  it("normalizeOrigin acepta FQDN o URL y devuelve https://host", async () => {
+    const { normalizeOrigin } = await import("../src/secrets/vault.js");
+    expect(normalizeOrigin("accounts.example.com")).toBe("https://accounts.example.com");
+    expect(normalizeOrigin("https://accounts.example.com/login?x=1")).toBe("https://accounts.example.com");
+    expect(normalizeOrigin("http://localhost:3000")).toBe("http://localhost:3000");
+    expect(normalizeOrigin("")).toBe("");
+  });
+
+  it("guarda y recupera el binding de orígenes (anti-phishing)", async () => {
+    const { setSecret, getSecretOrigins } = await import("../src/secrets/vault.js");
+    await setSecret("shop.pass", "x", ["shop.example.com", "https://accounts.example.com/login"]);
+    expect(await getSecretOrigins("shop.pass")).toEqual(["https://shop.example.com", "https://accounts.example.com"]);
+    // Un secreto sin binding devuelve undefined (no restringe).
+    await setSecret("free.pass", "y");
+    expect(await getSecretOrigins("free.pass")).toBeUndefined();
+  });
 });

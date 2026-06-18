@@ -8,11 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
+import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { loadSession } from "../browser/session-store.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
+import { tipsBlockFor } from "./domain-memory.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -45,15 +46,61 @@ export interface NaviaOptions {
   hooks?: Partial<AgentHooks>;
   /** URL inicial opcional para abrir antes de empezar. */
   startUrl?: string;
+  /**
+   * Validación automática post-tarea (estilo Skyvern, sin planner pesado): al "terminar",
+   * un juez LLM verifica contra el objetivo usando el estado actual; si no se cumplió,
+   * re-inyecta al loop con el diagnóstico (una vez por tarea). Cuesta 1 llamada extra.
+   */
+  validate?: boolean;
+  /**
+   * Memoria por dominio (playbooks): inyecta tips aprendidos del dominio (de startUrl) en el
+   * system prompt y guarda notas de wait_for_human como tips. Default ON (solo actúa si hay tips).
+   */
+  memory?: boolean;
+  /** Permitir la tool `evaluate` (ejecución de JS). Default true; false la deshabilita (sitios hostiles). */
+  allowEval?: boolean;
+  /** Allow-list de dominios (red): aborta peticiones fuera de la lista (anti-exfiltración). */
+  allowDomains?: string[];
+}
+
+/** Métricas de fiabilidad/coste de una corrida (más allá de éxito binario). */
+export interface NaviaMetrics {
+  steps: number;
+  toolCalls: number;
+  toolErrors: number;
+  /** Tokens de entrada (incluye cache read/creation) y de salida (solo provider API). */
+  tokensIn: number;
+  tokensOut: number;
+  /** Acciones exitosas que siguieron a un error (recuperación). */
+  recoveries: number;
+  /** Llamadas idénticas consecutivas (señal de bucle/atasco). */
+  loopHits: number;
 }
 
 export interface NaviaResult {
   /** Resumen final en texto que devuelve la IA. */
   summary: string;
   steps: number;
+  /** Métricas de la corrida (para evals/observabilidad). */
+  metrics?: NaviaMetrics;
 }
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
+
+/** Tool del validador post-tarea: el juez SOLO puede responder con este veredicto tipado. */
+const VERDICT_TOOL: Anthropic.Tool = {
+  name: "verdict",
+  description: "Veredicto de si la tarea del usuario se cumplió realmente, mirando el estado actual de la página.",
+  input_schema: {
+    type: "object",
+    properties: {
+      done: { type: "boolean", description: "true solo si la tarea se completó de verdad" },
+      reason: { type: "string", description: "por qué se cumplió o qué falta" },
+      suggestion: { type: "string", description: "si falta algo, qué hacer a continuación" },
+    },
+    required: ["done", "reason"],
+  },
+};
 
 /**
  * Pone un breakpoint de prompt caching rodante en el último bloque del último mensaje
@@ -61,10 +108,24 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
  * breakpoints estáticos de system y tools, cachea el prefijo creciente de la conversación
  * → ~70-90% menos de coste/latencia de input en cada turno.
  */
+/** Marcador del snapshot inline que devuelven navigate y cada acción (auto-snapshot). */
+const INLINE_SNAPSHOT_MARK = "--- página";
+
+/** ¿Este bloque de texto contiene un snapshot de página (standalone o inline)? */
+function holdsSnapshot(text: string): boolean {
+  return text.startsWith("Página:") || text.includes(INLINE_SNAPSHOT_MARK);
+}
+
 /**
  * Poda snapshots y screenshots viejos del historial (deja solo los `keep` más recientes,
  * reemplazando los demás por un placeholder). Evita que el contexto/coste crezca sin
  * límite manteniendo el contenido reciente —lo único accionable— intacto.
+ *
+ * Importante: con auto-snapshot, la mayoría de los snapshots NO llegan como bloque suelto
+ * ("Página:…") sino INLINE al final del resultado de navigate/click/type ("--- página…").
+ * Aquí cubrimos ambos: del bloque inline se conserva el mensaje de la acción y se elide solo
+ * la parte del snapshot, que es lo voluminoso. La elisión es idempotente → una vez podado un
+ * bloque queda estable, sin re-romper el prefijo cacheado en los siguientes turnos.
  */
 function pruneHistory(messages: Anthropic.MessageParam[], keep = 2): void {
   const snapshots: any[] = [];
@@ -74,13 +135,19 @@ function pruneHistory(messages: Anthropic.MessageParam[], keep = 2): void {
     for (const block of m.content as any[]) {
       if (block.type !== "tool_result" || !Array.isArray(block.content)) continue;
       for (const inner of block.content) {
-        if (inner.type === "text" && typeof inner.text === "string" && inner.text.startsWith("Página:")) snapshots.push(inner);
+        if (inner.type === "text" && typeof inner.text === "string" && holdsSnapshot(inner.text)) snapshots.push(inner);
         if (inner.type === "image") images.push(inner);
       }
     }
   }
   for (const b of snapshots.slice(0, Math.max(0, snapshots.length - keep))) {
-    b.text = "[snapshot anterior elidido para ahorrar contexto — vuelve a hacer snapshot si lo necesitas]";
+    const mark = b.text.indexOf(INLINE_SNAPSHOT_MARK);
+    if (mark !== -1) {
+      // Conserva el mensaje de la acción; elide el snapshot voluminoso que venía detrás.
+      b.text = b.text.slice(0, mark).trimEnd() + "\n[snapshot elidido para ahorrar contexto — vuelve a hacer snapshot si lo necesitas]";
+    } else {
+      b.text = "[snapshot anterior elidido para ahorrar contexto — vuelve a hacer snapshot si lo necesitas]";
+    }
   }
   for (const b of images.slice(0, Math.max(0, images.length - keep))) {
     b.type = "text";
@@ -89,14 +156,30 @@ function pruneHistory(messages: Anthropic.MessageParam[], keep = 2): void {
   }
 }
 
+/**
+ * Caching frecuencia-ordenado: el prefijo va de lo ESTÁTICO a lo VOLÁTIL.
+ *  - system y tools (constantes) llevan su breakpoint estático en run().
+ *  - Aquí, en los mensajes: un breakpoint ANCLA en el primer mensaje (la tarea, que no
+ *    cambia → cache de larga vida, sobrevive al TTL de 5 min entre turnos lentos) y uno
+ *    RODANTE en el último bloque (captura el prefijo creciente de la conversación). Con la
+ *    elisión idempotente de pruneHistory, el prefijo entre ambos se mantiene estable → el
+ *    snapshot volátil queda al final y se maximizan los aciertos de cache turno a turno.
+ * Anthropic admite 4 breakpoints: system + tools + ancla + rodante = 4.
+ */
 function setCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
   for (const m of messages) {
     if (Array.isArray(m.content)) for (const b of m.content as any[]) delete b.cache_control;
   }
-  const last = messages[messages.length - 1];
-  if (last && Array.isArray(last.content) && last.content.length) {
-    (last.content[last.content.length - 1] as any).cache_control = { type: "ephemeral" };
-  }
+  const lastBlock = (m: Anthropic.MessageParam | undefined): any | null =>
+    m && Array.isArray(m.content) && m.content.length ? (m.content[m.content.length - 1] as any) : null;
+
+  // Ancla estática: primer mensaje (la tarea inicial, inmutable).
+  const anchor = lastBlock(messages[0]);
+  if (anchor) anchor.cache_control = { type: "ephemeral" };
+
+  // Rodante: último bloque del último mensaje (prefijo creciente).
+  const rolling = lastBlock(messages[messages.length - 1]);
+  if (rolling) rolling.cache_control = { type: "ephemeral" };
 }
 
 export class BrowserAgent {
@@ -116,6 +199,7 @@ export class BrowserAgent {
       log: opts.hooks?.log,
       onTaskSummary: opts.hooks?.onTaskSummary,
       nextTask: opts.hooks?.nextTask,
+      rememberNote: opts.hooks?.rememberNote,
     };
   }
 
@@ -143,7 +227,9 @@ export class BrowserAgent {
       cdpEndpoint: this.opts.cdpEndpoint,
       userDataDir,
       storageState,
+      allowDomains: this.opts.allowDomains,
     });
+    const policy: ToolPolicy = { allowEval: this.opts.allowEval };
 
     try {
       if (this.opts.startUrl) await driver.navigate(this.opts.startUrl);
@@ -163,29 +249,61 @@ export class BrowserAgent {
       }
       const recorder = createRecorder(this.opts.record, undefined, ws);
       if (recorder.path) this.hooks.log?.(`📝 Trayectoria: ${recorder.path}`);
+
+      // Validador post-tarea (opt-in): juez LLM que mira el estado real y dice si se cumplió.
+      const validateTask = async (candidate: string): Promise<{ done: boolean; reason: string; suggestion?: string }> => {
+        try {
+          const snap = await driver.snapshot();
+          const resp = await this.client.messages.create({
+            model,
+            max_tokens: 1024,
+            tools: [VERDICT_TOOL],
+            tool_choice: { type: "tool", name: "verdict" },
+            messages: [
+              {
+                role: "user",
+                content: `Tarea original del usuario: ${this.opts.task}\n\nLo que el agente reporta haber hecho: ${candidate}\n\nEstado ACTUAL de la página (árbol de accesibilidad):\n${snap.slice(0, 12000)}\n\n¿La tarea se completó REALMENTE? Sé estricto pero justo. Llama a verdict(done, reason, suggestion).`,
+              },
+            ],
+          });
+          const tu = resp.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "verdict");
+          const v = tu?.input as any;
+          return { done: !!v?.done, reason: v?.reason ?? "", suggestion: v?.suggestion };
+        } catch {
+          return { done: true, reason: "validador no disponible (no bloquea)" };
+        }
+      };
       await recorder.log({ type: "start", task: this.opts.task, engine, model: this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL, provider: "api" });
-      const system = buildSystemPrompt(this.opts.systemExtra);
+      // Memoria por dominio: inyecta tips aprendidos del dominio (de startUrl) si los hay.
+      const memoryExtra = this.opts.memory === false ? "" : await tipsBlockFor(this.opts.startUrl);
+      if (memoryExtra) this.hooks.log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
+      const system = buildSystemPrompt([this.opts.systemExtra, memoryExtra].filter(Boolean).join("\n\n") || undefined);
       // Breakpoints de caché estáticos: system (constante) y el bloque de tools (constante).
       const systemBlocks: Anthropic.TextBlockParam[] = [
         { type: "text", text: system, cache_control: { type: "ephemeral" } },
       ];
-      const cachedTools: Anthropic.Tool[] = TOOL_DEFINITIONS.map((t, i) =>
-        i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t,
+      const tools = toolDefinitions(policy);
+      const cachedTools: Anthropic.Tool[] = tools.map((t, i) =>
+        i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t,
       );
 
       const messages: Anthropic.MessageParam[] = [
         {
           role: "user",
-          content: `Tarea: ${this.opts.task}\n\nEmpieza navegando o haciendo un snapshot según corresponda.`,
+          content: [{ type: "text", text: `Tarea: ${this.opts.task}\n\nEmpieza navegando o haciendo un snapshot según corresponda.` }],
         },
       ];
 
       let totalSteps = 0;
+      const metrics: NaviaMetrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
+      let lastWasError = false;
+      let lastSig = "";
       // Bucle de CONVERSACIÓN: cada iteración resuelve una tarea; si hay hook nextTask, al
       // terminar pide la siguiente reusando el MISMO navegador/sesión y el historial completo.
       for (;;) {
         let steps = 0;
         let summary: string | null = null;
+        let validateAttempts = 0;
         while (steps < maxSteps) {
           steps++;
           totalSteps++;
@@ -199,6 +317,9 @@ export class BrowserAgent {
             messages,
           });
 
+          const u = response.usage as any;
+          metrics.tokensIn += (u?.input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0);
+          metrics.tokensOut += u?.output_tokens ?? 0;
           messages.push({ role: "assistant", content: response.content });
 
           const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
@@ -212,11 +333,32 @@ export class BrowserAgent {
           }
 
           if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
-            summary = response.content
+            const candidate = response.content
               .filter((b): b is Anthropic.TextBlock => b.type === "text")
               .map((b) => b.text)
               .join("\n")
               .trim();
+            // Validador post-tarea: si está activo y aún no se reintentó, verifica el estado
+            // real; si no se cumplió, re-inyecta el diagnóstico y sigue (una vez).
+            if (this.opts.validate && validateAttempts < 1) {
+              validateAttempts++;
+              const v = await validateTask(candidate);
+              if (!v.done) {
+                this.hooks.log?.(`🔎 Validación: incompleta — ${v.reason}`);
+                await recorder.log({ step: totalSteps, type: "validation", done: false, reason: preview(v.reason) });
+                messages.push({
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: `Validación automática: la tarea AÚN no parece completa. Motivo: ${v.reason}.${v.suggestion ? ` Sugerencia: ${v.suggestion}.` : ""} Continúa intentándolo; si de verdad es imposible, explica por qué.`,
+                    },
+                  ],
+                });
+                continue;
+              }
+            }
+            summary = candidate;
             await recorder.log({ step: totalSteps, type: "done", summary: preview(summary) });
             break;
           }
@@ -226,12 +368,19 @@ export class BrowserAgent {
           for (const tu of toolUses) {
             const refForLoc = (tu.input as any)?.ref;
             const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
+            metrics.toolCalls++;
+            const sig = `${tu.name}:${JSON.stringify(tu.input)}`;
+            if (sig === lastSig) metrics.loopHits++;
+            lastSig = sig;
             try {
-              const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks);
+              const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks, policy);
+              if (lastWasError) metrics.recoveries++;
+              lastWasError = false;
               const content: Anthropic.ToolResultBlockParam["content"] = [];
               if (out.text) content.push({ type: "text", text: out.text });
               if (out.imageBase64)
                 content.push({ type: "image", source: { type: "base64", media_type: "image/png", data: out.imageBase64 } });
+              this.hooks.log?.(`✓ ${tu.name}`);
               toolResults.push({ type: "tool_result", tool_use_id: tu.id, content });
               await recorder.log({
                 step: totalSteps,
@@ -249,6 +398,9 @@ export class BrowserAgent {
                 content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
                 is_error: true,
               });
+              metrics.toolErrors++;
+              lastWasError = true;
+              this.hooks.log?.(`✗ ${tu.name}: ${(err as Error).message}`);
               await recorder.log({ step: totalSteps, type: "action", tool: tu.name, input: tu.input, locator: locator ?? undefined, ok: false, error: (err as Error).message });
             }
           }
@@ -262,8 +414,11 @@ export class BrowserAgent {
 
         this.hooks.onTaskSummary?.(summary, totalSteps);
         const next = this.hooks.nextTask ? await this.hooks.nextTask() : null;
-        if (!next) return { summary, steps: totalSteps };
-        messages.push({ role: "user", content: `Nueva tarea (misma sesión del navegador): ${next}` });
+        if (!next) {
+          metrics.steps = totalSteps;
+          return { summary, steps: totalSteps, metrics };
+        }
+        messages.push({ role: "user", content: [{ type: "text", text: `Nueva tarea (misma sesión del navegador): ${next}` }] });
       }
     } finally {
       await driver.close();
@@ -286,6 +441,7 @@ export async function runNavia(opts: NaviaOptions): Promise<NaviaResult> {
       log: opts.hooks?.log,
       onTaskSummary: opts.hooks?.onTaskSummary,
       nextTask: opts.hooks?.nextTask,
+      rememberNote: opts.hooks?.rememberNote,
     };
     return runViaCli(opts, hooks);
   }

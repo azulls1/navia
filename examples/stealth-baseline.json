@@ -1,0 +1,14 @@
+{
+  "chromium": {
+    "webdriver": false,
+    "hasChrome": true,
+    "languages": 1,
+    "plugins": 5
+  },
+  "firefox": {
+    "webdriver": true,
+    "hasChrome": false,
+    "languages": 2,
+    "plugins": 0
+  }
+}

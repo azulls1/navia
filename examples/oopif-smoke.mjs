@@ -36,7 +36,7 @@ try {
   await driver.waitFor({ timeMs: 800 });
   const snap = await driver.snapshot();
   console.log(snap);
-  const m = snap.match(/button "DentroDelFrame" \[ref=(f?\d+_?\d*)\]/);
+  const m = snap.match(/button "DentroDelFrame" \[ref=(v\d+:f?\d+_?\d*)\]/);
   assert(m, "esperaba ver el botón del iframe en el snapshot\n" + snap);
 
   await driver.click(m[1]);

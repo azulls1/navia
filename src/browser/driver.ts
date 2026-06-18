@@ -30,10 +30,19 @@ export class BrowserDriver {
   private refMode: "cdp" | "legacy" = "legacy";
   /** Firma del último estado observado (url + hash del snapshot), para change-observation. */
   private lastSig: string | null = null;
+  /**
+   * Versión del snapshot vigente. Cada lectura la incrementa y los refs se emiten como
+   * `v<N>:<ref>`. Antes de actuar validamos que la versión del ref coincida con la actual
+   * → si el modelo reusa un ref de un snapshot viejo (DOM ya mutado), lo rechazamos con un
+   * mensaje claro en vez de actuar sobre un nodo obsoleto/reemplazado (arXiv 2511.19477).
+   */
+  private snapshotVersion = 0;
   /** Rutas de archivos descargados durante la sesión. */
   private downloads: string[] = [];
   /** Sesiones CDP por iframe cross-origin (OOPIF), por ordinal del último snapshot. */
   private frameSessions = new Map<number, CDPSession>();
+  /** Origen (https://host) de cada OOPIF por ordinal, para binding anti-phishing del vault. */
+  private frameOrigins = new Map<number, string>();
   /** ref → {role, name} del último snapshot, para grabar macros (action-caching). */
   private refDescriptors = new Map<string, { role: string; name: string }>();
   page!: Page;
@@ -47,6 +56,19 @@ export class BrowserDriver {
     // Captura descargas de cualquier pestaña (actual o nueva).
     ctx.on("page", (p) => driver.attachPage(p));
     driver.attachPage(driver.page);
+    // Allow-list de red (anti-exfiltración): aborta peticiones a dominios no permitidos.
+    if (opts.allowDomains?.length) {
+      const allow = opts.allowDomains.map((d) => d.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""));
+      await ctx.route("**/*", (route) => {
+        try {
+          const host = new URL(route.request().url()).hostname.toLowerCase();
+          const ok = !host || allow.some((d) => host === d || host.endsWith("." + d));
+          return ok ? route.continue() : route.abort();
+        } catch {
+          return route.continue();
+        }
+      });
+    }
     return driver;
   }
 
@@ -72,6 +94,27 @@ export class BrowserDriver {
     this.lastSig = null;
     for (const s of this.frameSessions.values()) s.detach().catch(() => {});
     this.frameSessions.clear();
+    this.frameOrigins.clear();
+  }
+
+  /**
+   * Origen REAL (https://host) del frame donde vive un ref — NO la barra de direcciones.
+   * Para refs de OOPIF (`fN_`) devuelve el origen de ESE iframe (clave anti-phishing: no
+   * teclear una contraseña en un iframe cross-origin que no sea el esperado). Para refs del
+   * frame principal/same-process, el origen top-level. "" si no se puede determinar.
+   */
+  originForRef(refRaw: string): string {
+    try {
+      const ref = refRaw.replace(/^v\d+:/, "");
+      const m = ref.match(/^f(\d+)_(\d+)$/);
+      if (m) {
+        const o = this.frameOrigins.get(Number(m[1]));
+        if (o) return o;
+      }
+      return new URL(this.page.url()).origin;
+    } catch {
+      return "";
+    }
   }
 
   /** Crea (una vez) la sesión CDP si el motor la soporta. Firefox → null. */
@@ -97,10 +140,26 @@ export class BrowserDriver {
   }
 
   /**
+   * Valida y quita el prefijo de versión `v<N>:` de un ref. Si la versión no es la del
+   * snapshot vigente, el ref es de una lectura anterior (el DOM pudo cambiar) → error claro
+   * para forzar un snapshot nuevo. Los refs sin prefijo (legacy/Firefox) se aceptan tal cual.
+   */
+  private stripVersion(ref: string): string {
+    const v = ref.match(/^v(\d+):(.*)$/s);
+    if (!v) return ref;
+    if (Number(v[1]) !== this.snapshotVersion)
+      throw new Error(
+        `el ref "${ref}" es de un snapshot anterior (v${v[1]}, actual v${this.snapshotVersion}); haz snapshot y usa los refs nuevos`,
+      );
+    return v[2];
+  }
+
+  /**
    * Resuelve un ref a {sesión CDP, objectId}. Los refs compuestos `fN_<id>` apuntan a un
    * iframe cross-origin (OOPIF) y usan la sesión de ese frame; los simples, la principal.
    */
-  private async resolveRef(ref: string): Promise<{ session: CDPSession; objectId: string }> {
+  private async resolveRef(refRaw: string): Promise<{ session: CDPSession; objectId: string }> {
+    const ref = this.stripVersion(refRaw);
     const m = ref.match(/^f(\d+)_(\d+)$/);
     let session: CDPSession | undefined;
     let backendNodeId: number;
@@ -139,11 +198,14 @@ export class BrowserDriver {
     if (cdp) {
       try {
         const { nodes } = (await cdp.send("Accessibility.getFullAXTree", {} as any)) as unknown as { nodes: AXNode[] };
-        const parsed = parseAxTree(nodes);
+        // Versiona los refs de esta lectura: cada snapshot sube la versión y los refs nacen
+        // como `v<N>:<id>` → actuar con un ref viejo se rechaza (ver stripVersion).
+        const verPrefix = `v${++this.snapshotVersion}:`;
+        const parsed = parseAxTree(nodes, verPrefix);
         this.refMode = "cdp";
         this.refDescriptors = new Map(parsed.descriptors);
         const title = await this.page.title().catch(() => "");
-        const frameText = await this.snapshotChildFrames();
+        const frameText = await this.snapshotChildFrames(verPrefix);
         return `Página: ${title}\nURL: ${this.page.url()}\n${parsed.text}${frameText}`;
       } catch {
         // si CDP falla puntualmente, caemos al método legacy
@@ -160,9 +222,10 @@ export class BrowserDriver {
    *  2) OOPIF (cross-site, otro proceso): sesión CDP propia del frame → refs compuestos
    *     `fN_<backendNodeId>` (donde viven Turnstile, logins y pagos cross-origin).
    */
-  private async snapshotChildFrames(): Promise<string> {
+  private async snapshotChildFrames(verPrefix = ""): Promise<string> {
     for (const s of this.frameSessions.values()) s.detach().catch(() => {});
     this.frameSessions.clear();
+    this.frameOrigins.clear();
     let out = "";
 
     // (1) Frames same-process vía frameId sobre la sesión principal.
@@ -181,7 +244,7 @@ export class BrowserDriver {
         sameProcessFrameIds.add(f.id);
         try {
           const { nodes } = (await this.cdp!.send("Accessibility.getFullAXTree", { frameId: f.id } as any)) as unknown as { nodes: AXNode[] };
-          const parsed = parseAxTree(nodes);
+          const parsed = parseAxTree(nodes, verPrefix);
           for (const [k, v] of parsed.descriptors) this.refDescriptors.set(k, v);
           if (parsed.refs.size > 0) out += `\n[iframe: ${f.url || "(?)"}]\n${parsed.text}`;
         } catch {
@@ -211,7 +274,12 @@ export class BrowserDriver {
         await fs.send("Accessibility.enable").catch(() => {});
         const { nodes } = (await fs.send("Accessibility.getFullAXTree", {} as any)) as unknown as { nodes: AXNode[] };
         this.frameSessions.set(ordinal, fs);
-        const parsed = parseAxTree(nodes, `f${ordinal}_`);
+        try {
+          this.frameOrigins.set(ordinal, new URL(url).origin);
+        } catch {
+          /* url no parseable → sin binding para este frame */
+        }
+        const parsed = parseAxTree(nodes, `${verPrefix}f${ordinal}_`);
         for (const [k, v] of parsed.descriptors) this.refDescriptors.set(k, v);
         out += `\n[iframe ${ordinal} (cross-origin): ${url}]\n${parsed.text}`;
       } catch {
@@ -252,6 +320,11 @@ export class BrowserDriver {
   /** Descriptor estable (rol + nombre accesible) de un ref del último snapshot, para macros. */
   describeRef(ref: string): { role: string; name: string } | null {
     return this.refDescriptors.get(ref) ?? null;
+  }
+
+  /** Todos los descriptores (ref → rol+nombre) del último snapshot, para self-healing del replay. */
+  currentDescriptors(): Array<[string, { role: string; name: string }]> {
+    return [...this.refDescriptors.entries()];
   }
 
   /** Resuelve un localizador estable {role, name} a un Locator de Playwright (para replay). */
@@ -423,15 +496,16 @@ export class BrowserDriver {
   }
 
   /** Sube archivos a un <input type="file"> por su ref. */
-  async uploadFile(ref: string, paths: string[]): Promise<void> {
+  async uploadFile(refRaw: string, paths: string[]): Promise<void> {
     if (this.refMode === "cdp" && this.cdp) {
+      const ref = this.stripVersion(refRaw);
       const m = ref.match(/^f(\d+)_(\d+)$/);
       const session = m ? this.frameSessions.get(Number(m[1])) : this.cdp;
       if (!session) throw new Error(`ref de iframe "${ref}" caduco; haz snapshot`);
       await session.send("DOM.setFileInputFiles", { files: paths, backendNodeId: Number(m ? m[2] : ref) } as any);
       return;
     }
-    await this.legacyLocator(ref).setInputFiles(paths);
+    await this.legacyLocator(refRaw).setInputFiles(paths);
   }
 
   /** Archivos descargados hasta ahora (rutas absolutas en ~/.navia/downloads). */

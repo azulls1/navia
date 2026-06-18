@@ -47,6 +47,20 @@ describe("parseAxTree", () => {
     expect(refs.size).toBe(0);
   });
 
+  it("antepone el prefijo (versión / frame) a cada ref y descriptor", () => {
+    const { text, refs, descriptors } = parseAxTree(sampleTree, "v3:");
+    expect(text).toContain('textbox "Correo" [ref=v3:11]');
+    expect(text).toContain('button "Entrar" [ref=v3:13]');
+    expect(refs.has("v3:11")).toBe(true);
+    expect(refs.has("11")).toBe(false);
+    expect(descriptors.get("v3:13")).toEqual({ role: "button", name: "Entrar" });
+  });
+
+  it("combina versión + ordinal de iframe en el ref (OOPIF)", () => {
+    const { refs } = parseAxTree(sampleTree, "v2:f1_");
+    expect(refs.has("v2:f1_13")).toBe(true);
+  });
+
   it("marca interactivos por la propiedad focusable aunque el rol no sea estándar", () => {
     const tree: AXNode[] = [
       { nodeId: "1", role: { value: "WebArea" }, childIds: ["2"] },

@@ -1,5 +1,9 @@
 # 🌐 Navia
 
+[![npm](https://img.shields.io/npm/v/navia-ai)](https://www.npmjs.com/package/navia-ai)
+[![provenance](https://img.shields.io/badge/npm-provenance-blueviolet)](https://docs.npmjs.com/generating-provenance-statements)
+[![MCP](https://img.shields.io/badge/MCP-server-orange)](https://github.com/azulls1/navia#mcp)
+
 > AI-powered autonomous browser agent. Give it a **natural-language instruction** and it opens a **real** browser (Chrome or Firefox), reads the page, clicks, fills forms, extracts data, and operates **any web portal** — just like a person would.
 
 Works with your **Anthropic (Claude) API key** — or with no key at all, using an AI CLI already signed in on your terminal. No per-site scripts: the AI discovers buttons and fields live, following the **navigate → read → act → verify** method.

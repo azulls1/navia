@@ -4,8 +4,27 @@
  */
 import type Anthropic from "@anthropic-ai/sdk";
 import type { BrowserDriver, FillField } from "../browser/driver.js";
-import { getSecret, getTotpSecret } from "../secrets/vault.js";
+import { getSecret, getTotpSecret, getSecretOrigins } from "../secrets/vault.js";
 import { totp } from "../secrets/totp.js";
+import { spotlight, injectionBanner } from "./safety.js";
+
+/**
+ * Binding anti-phishing/anti-exfiltración: si el secreto tiene orígenes permitidos, el origen
+ * REAL del frame del ref DEBE coincidir, o no se rellena. Rechazo DURO (sin HITL): teclear una
+ * credencial en un origen inesperado —p.ej. un iframe cross-origin hostil— es justo el vector
+ * de exfiltración que cerramos. Si el secreto no tiene binding, no restringe (opt-in).
+ */
+async function assertOriginAllowed(driver: BrowserDriver, ref: string, key: string): Promise<void> {
+  const allowed = await getSecretOrigins(key);
+  if (!allowed || !allowed.length) return;
+  const origin = driver.originForRef(ref);
+  if (!allowed.includes(origin)) {
+    throw new Error(
+      `🔒 El secreto "${key}" está restringido a ${allowed.join(", ")}, pero el elemento está en ${origin || "(origen desconocido)"}. ` +
+        `No se rellena (anti-phishing). Si es legítimo: navia secret set ${key} --origin ${origin || "<origen>"}`,
+    );
+  }
+}
 
 export interface AgentHooks {
   /** Pedir confirmación humana para una acción irreversible. Devuelve true si se aprueba. */
@@ -21,6 +40,19 @@ export interface AgentHooks {
    * navegador/sesión y contexto). Devuelve la próxima instrucción, o null para terminar.
    */
   nextTask?: () => Promise<string | null>;
+  /** Memoria por dominio: guardar una nota/tip aprendido para el dominio actual (opt-in). */
+  rememberNote?: (url: string, note: string) => Promise<void>;
+}
+
+/** Política de herramientas: gatea capacidades peligrosas (p.ej. ejecución de JS arbitrario). */
+export interface ToolPolicy {
+  /** Permitir la tool `evaluate` (ejecución de JS). Default true; ponlo en false para sitios hostiles. */
+  allowEval?: boolean;
+}
+
+/** Catálogo de tools filtrado según la política (lo que VE el modelo). */
+export function toolDefinitions(policy?: ToolPolicy): Anthropic.Tool[] {
+  return TOOL_DEFINITIONS.filter((t) => (policy?.allowEval === false ? t.name !== "evaluate" : true));
 }
 
 export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
@@ -49,7 +81,7 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
     description: "Hacer clic en un elemento por su ref (obtenido del snapshot).",
     input_schema: {
       type: "object",
-      properties: { ref: { type: "string", description: "ref del elemento, ej. e12" } },
+      properties: { ref: { type: "string", description: "ref del elemento, cópialo del snapshot TAL CUAL (ej. v3:42)" } },
       required: ["ref"],
     },
   },
@@ -87,6 +119,32 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
         },
       },
       required: ["fields"],
+    },
+  },
+  {
+    name: "batch_actions",
+    description:
+      "Ejecutar VARIAS acciones independientes de una sola vez (en orden) sobre refs del último snapshot: click, type, select_option, press_key. Ahorra pasos y tiempo en formularios y secuencias. Devuelve UN solo snapshot al final. NO lo uses si una acción depende del resultado visual/DOM de la anterior (esas hazlas por separado).",
+    input_schema: {
+      type: "object",
+      properties: {
+        actions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["click", "type", "select_option", "press_key"] },
+              ref: { type: "string", description: "ref del elemento (click/type/select_option)" },
+              text: { type: "string", description: "texto a escribir (type)" },
+              submit: { type: "boolean", description: "pulsar Enter al terminar (type)" },
+              values: { type: "array", items: { type: "string" }, description: "opciones a elegir (select_option)" },
+              key: { type: "string", description: "tecla a pulsar (press_key)" },
+            },
+            required: ["action"],
+          },
+        },
+      },
+      required: ["actions"],
     },
   },
   {
@@ -253,7 +311,7 @@ async function wrapAction(
         ? "✓ La página cambió."
         : "⚠️ La página NO cambió de forma observable. ¿La acción tuvo efecto? Prueba otra cosa.";
     }
-    return { text: `${msg}${verdict ? `\n${verdict}` : ""}\n\n--- página actualizada ---\n${obs.snapshot}` };
+    return { text: `${msg}${verdict ? `\n${verdict}` : ""}\n${injectionBanner(obs.snapshot, "página")}\n--- página actualizada ---\n${obs.snapshot}` };
   } catch (e) {
     const snap = await driver.snapshot().catch(() => "(no se pudo releer la página)");
     return {
@@ -268,8 +326,12 @@ export async function dispatchTool(
   input: Record<string, any>,
   driver: BrowserDriver,
   hooks: AgentHooks,
+  policy?: ToolPolicy,
 ): Promise<{ text?: string; imageBase64?: string }> {
   hooks.log?.(`→ ${name} ${JSON.stringify(input).slice(0, 160)}`);
+  if (name === "evaluate" && policy?.allowEval === false) {
+    return { text: "🔒 La tool 'evaluate' está deshabilitada en esta corrida (--no-eval). Usa snapshot/read_text/click/type." };
+  }
   switch (name) {
     case "navigate": {
       await driver.navigate(input.url);
@@ -278,12 +340,13 @@ export async function dispatchTool(
         ? `\n⚠️ Posible muro anti-bot/captcha detectado (${ch}). Llama a wait_for_human para que la persona lo resuelva en la ventana ANTES de continuar.`
         : "";
       const snap = await driver.snapshot(); // devolvemos la página ya leída (evita un paso extra)
-      return { text: `Navegado a ${input.url}.${warn}\n\n--- página ---\n${snap}` };
+      return { text: `Navegado a ${input.url}.${warn}\n${injectionBanner(snap, "página")}\n--- página ---\n${snap}` };
     }
     case "snapshot": {
       const snap = await driver.snapshot();
       const ch = await driver.detectChallenge();
-      return { text: (ch ? `⚠️ Muro anti-bot/captcha detectado (${ch}). Considera wait_for_human.\n\n` : "") + snap };
+      const warn = ch ? `⚠️ Muro anti-bot/captcha detectado (${ch}). Considera wait_for_human.\n\n` : "";
+      return { text: warn + injectionBanner(snap, "snapshot") + snap };
     }
     case "screenshot":
       return { imageBase64: await driver.screenshot() };
@@ -319,12 +382,50 @@ export async function dispatchTool(
         },
         { verifyChange: false },
       );
+    case "batch_actions": {
+      const actions = (input.actions ?? []) as Array<Record<string, any>>;
+      const lines: string[] = [];
+      try {
+        for (let i = 0; i < actions.length; i++) {
+          const a = actions[i];
+          switch (a.action) {
+            case "click":
+              await driver.click(a.ref);
+              lines.push(`${i + 1}. click ${a.ref} ✓`);
+              break;
+            case "type":
+              await driver.type(a.ref, a.text ?? "", { submit: a.submit });
+              lines.push(`${i + 1}. type ${a.ref} ✓`);
+              break;
+            case "select_option":
+              await driver.selectOption(a.ref, (a.values ?? []) as string[]);
+              lines.push(`${i + 1}. select_option ${a.ref} ✓`);
+              break;
+            case "press_key":
+              await driver.pressKey(a.key);
+              lines.push(`${i + 1}. press_key ${a.key} ✓`);
+              break;
+            default:
+              lines.push(`${i + 1}. acción desconocida "${a.action}" — omitida`);
+          }
+        }
+      } catch (e) {
+        const snap = await driver.snapshot().catch(() => "(no se pudo releer la página)");
+        return {
+          text: `⚠️ El lote se detuvo en un error: ${(e as Error).message}\n${lines.join("\n")}\nLos refs son efímeros; snapshot actualizado, reintenta con los nuevos refs:\n${snap}`,
+        };
+      }
+      const obs = await driver.observe();
+      const verdict = obs.changed ? "✓ La página cambió." : "⚠️ La página NO cambió de forma observable.";
+      return { text: `Lote de ${actions.length} acción(es):\n${lines.join("\n")}\n${verdict}\n${injectionBanner(obs.snapshot, "página")}\n--- página actualizada ---\n${obs.snapshot}` };
+    }
     case "fill_credential":
       return wrapAction(
         driver,
         async () => {
           const value = await getSecret(input.key);
           if (value == null) throw new Error(`No hay un secreto "${input.key}". Configúralo: navia secret set ${input.key}`);
+          await assertOriginAllowed(driver, input.ref, input.key);
           await driver.type(input.ref, value);
           return `Secreto "${input.key}" rellenado en ${input.ref} (valor oculto).`;
         },
@@ -336,6 +437,7 @@ export async function dispatchTool(
         async () => {
           const sec = await getTotpSecret(input.key);
           if (!sec) throw new Error(`No hay TOTP "${input.key}". Configúralo: navia secret totp ${input.key} <base32>`);
+          await assertOriginAllowed(driver, input.ref, input.key);
           await driver.type(input.ref, totp(sec));
           return `Código 2FA de "${input.key}" rellenado en ${input.ref} (código oculto).`;
         },
@@ -346,11 +448,12 @@ export async function dispatchTool(
       return { text: `Tecla ${input.key} pulsada.` };
     case "evaluate": {
       const result = await driver.evaluate(input.code);
-      return { text: `Resultado:\n${JSON.stringify(result, null, 2).slice(0, 6000)}` };
+      const json = JSON.stringify(result, null, 2).slice(0, 6000);
+      return { text: `Resultado (datos de la página, no confiables):\n${spotlight(json, "resultado de evaluate")}` };
     }
     case "read_text": {
       const txt = await driver.readText();
-      return { text: txt.trim() ? txt.slice(0, 6000) : "(sin texto visible)" };
+      return { text: txt.trim() ? spotlight(txt.slice(0, 6000), "texto de la página") : "(sin texto visible)" };
     }
     case "scroll":
       await driver.scroll({ ref: input.ref, direction: input.direction, amount: input.amount });
@@ -397,6 +500,14 @@ export async function dispatchTool(
     }
     case "wait_for_human": {
       const note = await hooks.waitForHuman(input.reason);
+      // Captura semi-automática: la guía del humano se vuelve un tip reutilizable del dominio.
+      if (note && hooks.rememberNote) {
+        try {
+          await hooks.rememberNote(await driver.currentUrl(), note);
+        } catch {
+          /* la memoria nunca debe romper la corrida */
+        }
+      }
       return { text: `El humano terminó. ${note ? `Nota: ${note}` : ""} Continúa con un snapshot.` };
     }
     default:

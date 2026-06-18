@@ -18,7 +18,7 @@ await client.callTool({ name: "navigate", arguments: { url: "https://example.com
 const res = await client.callTool({ name: "snapshot", arguments: {} });
 const text = res.content.find((c) => c.type === "text")?.text ?? "";
 console.log("\n--- snapshot vía MCP ---\n" + text);
-assert(/\[ref=\d+\]/.test(text), "esperaba refs en el snapshot vía MCP");
+assert(/\[ref=v\d+:\d+\]/.test(text), "esperaba refs versionados en el snapshot vía MCP");
 
 await client.close();
 console.log("\n✓ MCP smoke OK (listTools + navigate + snapshot)");

@@ -22,8 +22,12 @@ import { startMcpServer } from "./mcp/server.js";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserEngine } from "./browser/launch.js";
+import { loadConfigSync, saveConfig, configPath, type NaviaConfig } from "./config.js";
 
 loadEnv({ quiet: true });
+
+// Config persistente del usuario (~/.navia/config.json): defaults para no repetir flags.
+const cfg: NaviaConfig = loadConfigSync();
 
 // Silencia SOLO el DeprecationWarning DEP0190 (spawn con shell:true + args). Los CLIs de IA
 // en Windows (claude.cmd/ant.cmd) requieren shell; el contenido no confiable viaja por stdin,
@@ -40,7 +44,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.21.0");
+  .version("0.22.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -58,6 +62,10 @@ interface RunFlags {
   yes?: boolean;
   workspace?: boolean | string;
   chat?: boolean;
+  validate?: boolean;
+  memory?: boolean;
+  eval?: boolean;
+  allowDomain?: string[];
 }
 
 /**
@@ -155,8 +163,12 @@ async function runTask(task: string, flags: RunFlags) {
       provider: flags.provider,
       cliCommand: flags.cliCommand,
       record: flags.record,
-      workspace: flags.workspace,
+      workspace: flags.workspace ?? cfg.workspace,
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
+      validate: flags.validate,
+      memory: flags.memory,
+      allowEval: flags.eval,
+      allowDomains: flags.allowDomain,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
         confirmAction: async (description) => {
@@ -172,6 +184,15 @@ async function runTask(task: string, flags: RunFlags) {
           console.log(pc.yellow(`\n🙋 Necesito que hagas algo en la ventana del navegador:\n   ${reason}`));
           return ask(pc.yellow("Cuando termines, presiona Enter (o escribe una nota): "));
         },
+        // Memoria por dominio: una nota dejada en wait_for_human se guarda como tip del sitio.
+        rememberNote:
+          flags.memory === false
+            ? undefined
+            : async (url, note) => {
+                const { addTip, domainOf } = await import("./agent/domain-memory.js");
+                await addTip(url, { note });
+                console.log(pc.dim(`🧠 Nota guardada en el playbook de ${domainOf(url) || url}.`));
+              },
         // Modo conversación: muestra el resumen de cada tarea…
         onTaskSummary: (summary, steps) => {
           console.log(pc.green(`\n✓ Terminado en ${steps} pasos.\n`));
@@ -192,7 +213,17 @@ async function runTask(task: string, flags: RunFlags) {
           : undefined,
       },
     });
-    void result;
+    const m = result.metrics;
+    if (m) {
+      console.log(
+        pc.dim(
+          `\n📊 ${m.steps} pasos · ${m.toolCalls} tools` +
+            (m.toolErrors ? ` (${m.toolErrors} err, ${m.recoveries} recup)` : "") +
+            (m.loopHits ? ` · ${m.loopHits} repetidas` : "") +
+            (m.tokensIn ? ` · ${m.tokensIn + m.tokensOut} tokens` : ""),
+        ),
+      );
+    }
   } catch (err) {
     console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
     process.exitCode = 1;
@@ -364,20 +395,29 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
 
 const browserOpt = (cmd: Command) =>
   cmd
-    .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
-    .option("-m, --model <model>", "modelo de Claude (default claude-sonnet-4-6)")
+    .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
+    .option("-m, --model <model>", "modelo de Claude (default claude-sonnet-4-6)", cfg.model)
     .option("--headless", "ejecutar sin ventana visible")
     .option("--slow-mo <ms>", "ralentizar acciones N ms (útil para anti-bot)")
     .option("--cdp-port <port>", "puerto de depuración para --browser chrome (default 9222)")
     .option("--cdp-endpoint <url>", "conectar a un Chrome ya abierto, ej http://localhost:9222")
     .option("--start-url <url>", "abrir esta URL antes de empezar")
-    .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)")
-    .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", "auto")
+    .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)", cfg.profile)
+    .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", cfg.provider || "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
     .option("--record [path]", "registrar la corrida en JSONL (default ~/.navia/trajectories/; o una ruta. Tip: usa --workspace para bitácora completa)")
     .option("--workspace [dir]", "crear carpeta-bitácora (memoria) por tarea (auto: Obsidian/Escritorio, o la ruta dada)")
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--chat", "modo conversación: al terminar, mantiene el navegador y pide la siguiente tarea")
+    .option("--validate", "validación post-tarea: al terminar, un juez verifica el resultado y reintenta una vez si no se cumplió")
+    .option("--no-memory", "no inyectar ni guardar playbooks por dominio (memoria de sitio)")
+    .option("--no-eval", "deshabilitar la tool 'evaluate' (ejecución de JS) — recomendado en sitios no confiables")
+    .option(
+      "--allow-domain <dominio>",
+      "allow-list de red: solo permite peticiones a estos dominios (repetible; anti-exfiltración)",
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
     .option("--max-steps <n>", "máximo de pasos (default 60)");
 
 // `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.
@@ -458,8 +498,67 @@ program
         console.log(pc.dim(m)),
       );
       console.log(
-        (r.failed === 0 ? pc.green("\n✓") : pc.yellow("\n•")) + ` Replay: ${r.ran}/${r.total} acciones OK` + (r.failed ? `, ${r.failed} fallaron` : ""),
+        (r.failed === 0 ? pc.green("\n✓") : pc.yellow("\n•")) +
+          ` Replay: ${r.ran}/${r.total} acciones OK` +
+          (r.failed ? `, ${r.failed} fallaron` : "") +
+          (r.healed ? pc.cyan(` · ${r.healed} sanada(s)`) : ""),
       );
+    } catch (err) {
+      console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
+      process.exitCode = 1;
+    }
+  });
+
+// `navia eval` — corre un dataset de tareas (sitios vivos) y las juzga con un juez LLM (WebJudge).
+program
+  .command("eval")
+  .description("Evalúa Navia sobre un dataset de tareas (JSONL Online-Mind2Web-ish) con un juez LLM. Reporta tasa de éxito + métricas.")
+  .option("--dataset <archivo>", "JSONL de tareas {task_id, task, url, level}; por defecto un set de muestra")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-m, --model <model>", "modelo de Claude (agente y juez)")
+  .option("--provider <p>", "motor de IA: auto | api | claude-cli", "auto")
+  .option("--headless", "ejecutar sin ventana visible")
+  .option("--max-steps <n>", "máximo de pasos por tarea (default 30)")
+  .option("--report <archivo>", "guardar el reporte JSON en esta ruta")
+  .action(async (o: { dataset?: string; browser: BrowserEngine; model?: string; provider?: "auto" | "api" | "claude-cli"; headless?: boolean; maxSteps?: string; report?: string }) => {
+    const { runEval, parseDataset } = await import("./agent/eval.js");
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const dsPath = o.dataset ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "examples", "eval", "sample.jsonl");
+    let dataset;
+    try {
+      dataset = parseDataset(await readFile(dsPath, "utf8"));
+    } catch (e) {
+      console.error(pc.red(`✗ No pude leer el dataset (${dsPath}): ${(e as Error).message}`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(pc.cyan(`\n🧪 Navia eval — ${dataset.length} tarea(s) · ${o.browser}\n`));
+    try {
+      const report = await runEval({
+        dataset,
+        browser: o.browser,
+        model: o.model,
+        provider: o.provider,
+        headless: o.headless,
+        maxSteps: o.maxSteps ? Number(o.maxSteps) : 30,
+        onCase: (c) =>
+          console.log(
+            `${c.success ? pc.green("✓") : pc.red("✗")} [${c.task_id}] ${c.steps} pasos · ${(c.ms / 1000).toFixed(1)}s` +
+              (c.metrics?.tokensIn ? ` · ${c.metrics.tokensIn + c.metrics.tokensOut} tok` : "") +
+              pc.dim(` — ${c.reason}`),
+          ),
+      });
+      console.log(
+        pc.cyan(`\n📊 Éxito: ${report.passed}/${report.total} (${(report.successRate * 100).toFixed(0)}%)`) +
+          ` · pasos medios ${report.avgSteps.toFixed(1)} · ${report.totalTokens} tokens`,
+      );
+      for (const [lvl, s] of Object.entries(report.byLevel)) console.log(pc.dim(`   ${lvl}: ${s.passed}/${s.total}`));
+      if (o.report) {
+        await writeFile(o.report, JSON.stringify(report, null, 2), "utf8");
+        console.log(pc.dim(`\nReporte guardado en ${o.report}`));
+      }
     } catch (err) {
       console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
       process.exitCode = 1;
@@ -601,7 +700,13 @@ const secret = program.command("secret").description("Gestiona secretos cifrados
 secret
   .command("set <clave>")
   .description("Guarda una contraseña/secreto (te lo pide sin mostrarlo)")
-  .action(async (clave: string) => {
+  .option(
+    "--origin <url>",
+    "restringe el secreto a este origen (FQDN/URL); repetible. Anti-phishing: solo se rellena ahí",
+    (v: string, acc: string[]) => [...acc, v],
+    [] as string[],
+  )
+  .action(async (clave: string, o: { origin: string[] }) => {
     const { isVaultReadable } = await import("./secrets/vault.js");
     if (!(await isVaultReadable())) {
       console.error(
@@ -611,8 +716,9 @@ secret
       process.exit(1);
     }
     const value = await promptHidden(`Valor para "${clave}" (no se muestra): `);
-    await setSecret(clave, value);
-    console.log(pc.green(`✓ Secreto "${clave}" guardado. Úsalo con fill_credential(ref, "${clave}").`));
+    await setSecret(clave, value, o.origin);
+    const bind = o.origin.length ? pc.dim(` · restringido a ${o.origin.join(", ")}`) : "";
+    console.log(pc.green(`✓ Secreto "${clave}" guardado. Úsalo con fill_credential(ref, "${clave}").`) + bind);
   });
 secret
   .command("totp <clave>")
@@ -638,6 +744,109 @@ secret
     const bak = await backupVault();
     if (bak) console.log(pc.green(`✓ Vault respaldado en: ${bak}`) + pc.dim("\n  El próximo 'secret set' / wizard creará uno nuevo cifrado."));
     else console.log(pc.dim("No había vault que respaldar; empezarás limpio."));
+  });
+
+// `navia init` — escribe ~/.navia/config.json con tus valores por defecto.
+program
+  .command("init")
+  .description("Crea/actualiza ~/.navia/config.json (modelo, motor, perfil, provider, workspace) para no repetir flags")
+  .option("-m, --model <model>", "modelo de Claude por defecto")
+  .option("-b, --browser <engine>", "motor por defecto: chromium | firefox | chrome | patchright")
+  .option("-p, --profile <name>", "perfil por defecto")
+  .option("--provider <p>", "motor de IA por defecto: auto | api | claude-cli")
+  .option("--workspace [dir]", "guardar bitácora por defecto (true o una ruta base)")
+  .action(async (o: { model?: string; browser?: BrowserEngine; profile?: string; provider?: "auto" | "api" | "claude-cli"; workspace?: boolean | string }) => {
+    const current = loadConfigSync();
+    const anyFlag = o.model || o.browser || o.profile || o.provider || o.workspace !== undefined;
+    let next: NaviaConfig = { ...current };
+    if (anyFlag) {
+      next = { ...current, ...o };
+    } else {
+      // Interactivo: Enter para conservar el valor actual.
+      const rl = createInterface({ input, output });
+      const askv = async (label: string, cur?: string) => {
+        const a = (await rl.question(pc.cyan(`${label}${cur ? ` [${cur}]` : ""}: `))).trim();
+        return a || cur;
+      };
+      next.model = await askv("Modelo de Claude (Enter para omitir)", current.model);
+      next.browser = (await askv("Motor (chromium/firefox/chrome/patchright)", current.browser)) as BrowserEngine | undefined;
+      next.profile = await askv("Perfil por defecto (Enter para omitir)", current.profile);
+      next.provider = (await askv("Provider (auto/api/claude-cli)", current.provider)) as NaviaConfig["provider"];
+      rl.close();
+    }
+    const file = saveConfig(next);
+    console.log(pc.green(`✓ Config guardada en ${file}`));
+    console.log(pc.dim(JSON.stringify(loadConfigSync(), null, 2)));
+  });
+
+// `navia create <nombre>` — andamiaje de un proyecto mínimo que usa navia-ai.
+program
+  .command("create <nombre>")
+  .description("Crea una carpeta de proyecto con navia.config.json, .env.example, tasks.txt y un script de ejemplo")
+  .action(async (nombre: string) => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { existsSync } = await import("node:fs");
+    const dir = path.resolve(process.cwd(), nombre);
+    if (existsSync(dir)) {
+      console.error(pc.red(`✗ Ya existe: ${dir}`));
+      process.exitCode = 1;
+      return;
+    }
+    await mkdir(dir, { recursive: true });
+    const files: Record<string, string> = {
+      "navia.config.json": JSON.stringify({ browser: "chromium", provider: "auto", model: "claude-sonnet-4-6" }, null, 2) + "\n",
+      ".env.example": "# Copia a .env y rellena. Sin API key, Navia usa el CLI 'claude'/'ant' de tu terminal.\nANTHROPIC_API_KEY=\n",
+      "tasks.txt": "Abre example.com y dime el título de la página\n",
+      "run.mjs":
+        `import { runNavia } from "navia-ai";\n\n` +
+        `const { summary, metrics } = await runNavia({\n` +
+        `  task: "Abre example.com y dime el título de la página",\n` +
+        `  browser: "chromium",\n` +
+        `});\n` +
+        `console.log(summary);\n` +
+        `console.log(metrics);\n`,
+      "README.md": `# ${nombre}\n\nProyecto de automatización con [navia-ai](https://www.npmjs.com/package/navia-ai).\n\n\`\`\`bash\nnpm i navia-ai\nnode run.mjs\n# o vía CLI:\nnpx navia-ai "abre example.com y dime el título"\n\`\`\`\n`,
+    };
+    for (const [name, content] of Object.entries(files)) await writeFile(path.join(dir, name), content, "utf8");
+    console.log(pc.green(`✓ Proyecto creado en ${dir}`));
+    console.log(pc.dim(`  ${Object.keys(files).join(", ")}\n  Siguiente: cd ${nombre} && npm i navia-ai && node run.mjs`));
+  });
+
+// `navia playbook` — gestiona la memoria por dominio (tips que Navia reinyecta al volver al sitio).
+const playbook = program.command("playbook").description("Memoria por dominio: tips reutilizables que Navia inyecta al volver a un sitio");
+playbook
+  .command("list")
+  .description("Lista los dominios con playbook guardado")
+  .action(async () => {
+    const { listPlaybooks } = await import("./agent/domain-memory.js");
+    const domains = await listPlaybooks();
+    console.log(pc.cyan("Playbooks:"), domains.length ? domains.join(", ") : pc.dim("(ninguno)"));
+  });
+playbook
+  .command("show <dominio>")
+  .description("Muestra los tips guardados de un dominio")
+  .action(async (dominio: string) => {
+    const { loadPlaybook, formatTips, domainOf } = await import("./agent/domain-memory.js");
+    const d = domainOf(dominio) || dominio.toLowerCase();
+    const pb = await loadPlaybook(d);
+    console.log(pb.tips.length ? formatTips(d, pb.tips) : pc.dim(`Sin tips para ${d}.`));
+  });
+playbook
+  .command("add <dominio>")
+  .description("Añade un tip a un dominio (nota libre o estructurado scope/action/constraint)")
+  .option("--note <texto>", "nota libre")
+  .option("--scope <texto>", "cuándo aplica")
+  .option("--action <texto>", "qué hacer")
+  .option("--constraint <texto>", "restricción / cuidado")
+  .action(async (dominio: string, o: { note?: string; scope?: string; action?: string; constraint?: string }) => {
+    const { addTip, domainOf } = await import("./agent/domain-memory.js");
+    if (!o.note && !o.scope && !o.action && !o.constraint) {
+      console.error(pc.red("Da al menos --note o --scope/--action/--constraint."));
+      process.exitCode = 1;
+      return;
+    }
+    await addTip(dominio, { note: o.note, scope: o.scope, action: o.action, constraint: o.constraint });
+    console.log(pc.green(`✓ Tip añadido al playbook de ${domainOf(dominio) || dominio}.`));
   });
 
 // `navia login <perfil>` — abre el navegador para iniciar sesión y guarda el perfil.

@@ -20,6 +20,19 @@ import path from "node:path";
 
 export type BrowserEngine = "chromium" | "firefox" | "chrome" | "patchright";
 
+/**
+ * Flags anti-automatización para TODO motor basado en Chromium (chromium lanzado por
+ * Playwright y el Chrome real que spawneamos para CDP). Son los mismos que aplica patchright:
+ * quitan banderas delatoras baratas de detectar (no eliminan el leak de Runtime.enable —eso
+ * lo dan el snapshot CDP nativo y patchright—, pero suben el listón con coste cero).
+ */
+const CHROMIUM_STEALTH_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+  "--disable-popup-blocking",
+  "--disable-component-update",
+  "--disable-default-apps",
+];
+
 export interface LaunchOptions {
   engine: BrowserEngine;
   headless?: boolean;
@@ -32,6 +45,12 @@ export interface LaunchOptions {
   userDataDir?: string;
   /** storageState de Playwright (cookies+localStorage) para arrancar autenticado (chromium/firefox). */
   storageState?: unknown;
+  /**
+   * Allow-list de dominios (red): si se da, se ABORTAN las peticiones a dominios fuera de la
+   * lista → red de seguridad anti-exfiltración (aunque el modelo sea engañado, la conexión al
+   * dominio atacante no sale). Estricto: puede romper CDNs de terceros; úsalo en runs cerrados.
+   */
+  allowDomains?: string[];
 }
 
 export interface BrowserSession {
@@ -93,7 +112,13 @@ async function connectChromeCdp(opts: LaunchOptions): Promise<BrowserSession> {
     const dataDir = opts.userDataDir ?? path.join(os.homedir(), ".navia", "chrome-profile");
     spawn(
       chromePath,
-      [`--remote-debugging-port=${port}`, `--user-data-dir=${dataDir}`, "--no-first-run", "--no-default-browser-check"],
+      [
+        `--remote-debugging-port=${port}`,
+        `--user-data-dir=${dataDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        ...CHROMIUM_STEALTH_ARGS,
+      ],
       { detached: true, stdio: "ignore" },
     ).unref();
     endpoint = `http://localhost:${port}`;
@@ -153,22 +178,31 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
   // Endurecimiento básico anti-bot (señales JS clásicas). NO elimina el leak de
   // Runtime.enable (eso requiere snapshot CDP / Patchright; ver roadmap), pero quita
   // las banderas de automatización más baratas de detectar.
-  const browser =
-    opts.engine === "firefox"
-      ? await firefox.launch({
-          headless: opts.headless ?? false,
-          slowMo: opts.slowMo ?? 0,
-          firefoxUserPrefs: {
-            "dom.webdriver.enabled": false,
-            "useAutomationExtension": false,
-          },
-        })
-      : await chromium.launch({
-          headless: opts.headless ?? false,
-          slowMo: opts.slowMo ?? 0,
-          args: ["--disable-blink-features=AutomationControlled"],
-          ignoreDefaultArgs: ["--enable-automation"],
-        });
+  let browser: Browser;
+  if (opts.engine === "firefox") {
+    browser = await firefox.launch({
+      headless: opts.headless ?? false,
+      slowMo: opts.slowMo ?? 0,
+      firefoxUserPrefs: {
+        "dom.webdriver.enabled": false,
+        "useAutomationExtension": false,
+      },
+    });
+  } else {
+    const chromiumArgs = {
+      headless: opts.headless ?? false,
+      slowMo: opts.slowMo ?? 0,
+      args: CHROMIUM_STEALTH_ARGS,
+      ignoreDefaultArgs: ["--enable-automation"],
+    };
+    try {
+      // Coherencia de versión: usa el Chrome REAL instalado (canal "chrome") en vez del
+      // Chromium bundled (versión distinta = señal anti-bot). Si no hay Chrome → fallback.
+      browser = await chromium.launch({ ...chromiumArgs, channel: "chrome" });
+    } catch {
+      browser = await chromium.launch(chromiumArgs);
+    }
+  }
   const context = await browser.newContext({
     viewport: { width: 1366, height: 900 },
     storageState: (opts.storageState as any) ?? undefined,

@@ -15,6 +15,19 @@ import path from "node:path";
 interface VaultData {
   secrets: Record<string, string>;
   totp: Record<string, string>;
+  /** Binding anti-phishing: clave → orígenes FQDN permitidos (ej. ["https://accounts.example.com"]). */
+  origins?: Record<string, string[]>;
+}
+
+/** Normaliza un origen dado como URL completa o FQDN a la forma `https://host`. "" si no es válido. */
+export function normalizeOrigin(value: string): string {
+  if (!value) return "";
+  try {
+    const u = value.includes("://") ? new URL(value) : new URL(`https://${value}`);
+    return u.origin;
+  } catch {
+    return "";
+  }
 }
 
 function vaultFile(): string {
@@ -44,9 +57,32 @@ async function write(data: VaultData): Promise<void> {
   await writeFile(vaultFile(), JSON.stringify(payload), "utf8");
 }
 
-export async function setSecret(key: string, value: string): Promise<void> {
+export async function setSecret(key: string, value: string, origins?: string[]): Promise<void> {
   const d = await read();
   d.secrets[key] = value;
+  if (origins && origins.length) {
+    const norm = origins.map(normalizeOrigin).filter(Boolean);
+    if (norm.length) {
+      d.origins = d.origins ?? {};
+      d.origins[key] = [...new Set(norm)];
+    }
+  }
+  await write(d);
+}
+
+/** Orígenes FQDN permitidos para un secreto (binding anti-phishing), o undefined si no hay. */
+export async function getSecretOrigins(key: string): Promise<string[] | undefined> {
+  const o = (await read()).origins?.[key];
+  return o && o.length ? o : undefined;
+}
+
+/** Restringe un secreto existente a los orígenes dados (los reemplaza). */
+export async function setSecretOrigins(key: string, origins: string[]): Promise<void> {
+  const d = await read();
+  const norm = origins.map(normalizeOrigin).filter(Boolean);
+  d.origins = d.origins ?? {};
+  if (norm.length) d.origins[key] = [...new Set(norm)];
+  else delete d.origins[key];
   await write(d);
 }
 

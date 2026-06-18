@@ -10,11 +10,12 @@ import os from "node:os";
 import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { buildSystemPrompt } from "./system-prompt.js";
-import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "./tools.js";
+import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
 import { loadSession } from "../browser/session-store.js";
 import { cliComplete } from "../providers/cli-provider.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
+import { tipsBlockFor } from "./domain-memory.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
 
 function extractJson(s: string): any | null {
@@ -70,6 +71,27 @@ function pruneTranscript(transcript: string[], keepTail = 20): void {
   }
 }
 
+/** Validador post-tarea para el modo CLI: pide un veredicto JSON sobre el estado real. */
+async function validateViaCli(
+  driver: BrowserDriver,
+  opts: NaviaOptions,
+  task: string,
+  summary: string,
+): Promise<{ done: boolean; reason: string; suggestion?: string } | null> {
+  try {
+    const snap = await driver.snapshot();
+    const raw = await cliComplete(
+      `Tarea original del usuario: ${task}\nLo que el agente reporta haber hecho: ${summary}\nEstado ACTUAL de la página (árbol de accesibilidad):\n${truncate(snap, 8000)}\n\n¿La tarea se completó REALMENTE? Sé estricto pero justo. Responde ÚNICAMENTE con UN objeto JSON, sin texto alrededor: {"done":true|false,"reason":"...","suggestion":"..."}`,
+      { command: opts.cliCommand, model: opts.model, timeoutMs: 120000 },
+    );
+    const v = extractJson(raw);
+    if (!v || typeof v.done !== "boolean") return null;
+    return { done: v.done, reason: v.reason ?? "", suggestion: v.suggestion };
+  } catch {
+    return null;
+  }
+}
+
 export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<NaviaResult> {
   const engine = opts.browser ?? "chromium";
 
@@ -88,13 +110,18 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     cdpEndpoint: opts.cdpEndpoint,
     userDataDir,
     storageState,
+    allowDomains: opts.allowDomains,
   });
+  const policy: ToolPolicy = { allowEval: opts.allowEval };
 
   try {
     if (opts.startUrl) await driver.navigate(opts.startUrl);
 
-    const system = buildSystemPrompt(opts.systemExtra);
-    const toolCatalog = TOOL_DEFINITIONS.map(
+    // Memoria por dominio: inyecta tips aprendidos del dominio (de startUrl) si los hay.
+    const memoryExtra = opts.memory === false ? "" : await tipsBlockFor(opts.startUrl);
+    if (memoryExtra) hooks.log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
+    const system = buildSystemPrompt([opts.systemExtra, memoryExtra].filter(Boolean).join("\n\n") || undefined);
+    const toolCatalog = toolDefinitions(policy).map(
       (t) => `- ${t.name}: ${t.description}\n    args: ${JSON.stringify((t.input_schema as any).properties ?? {})}`,
     ).join("\n");
 
@@ -114,10 +141,14 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     await recorder.log({ type: "start", task: opts.task, engine, provider: "claude-cli" });
 
     let totalSteps = 0;
+    const metrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
+    let lastWasError = false;
+    let lastSig = "";
     // Bucle de CONVERSACIÓN: resuelve una tarea y, si hay hook nextTask, pide la siguiente
     // reusando el MISMO navegador/sesión y el historial (transcript) acumulado.
     for (;;) {
       let summary: string | null = null;
+      let validateAttempts = 0;
       for (let step = 1; step <= maxSteps; step++) {
         totalSteps++;
         const prompt = `${system}
@@ -148,6 +179,19 @@ o, si la tarea ya está completa o no puedes continuar:
         }
         if (action.done) {
           const s: string = action.summary ?? "(sin resumen)";
+          // Validador post-tarea (opt-in): verifica el estado real; si no se cumplió, re-inyecta.
+          if (opts.validate && validateAttempts < 1) {
+            validateAttempts++;
+            const v = await validateViaCli(driver, opts, opts.task, s);
+            if (v && v.done === false) {
+              hooks.log?.(`🔎 Validación: incompleta — ${v.reason}`);
+              await recorder.log({ step: totalSteps, type: "validation", done: false, reason: preview(v.reason) });
+              transcript.push(
+                `VALIDACIÓN AUTOMÁTICA: la tarea AÚN no parece completa. Motivo: ${v.reason}.${v.suggestion ? ` Sugerencia: ${v.suggestion}.` : ""} Continúa intentándolo; si de verdad es imposible, explica por qué.`,
+              );
+              continue;
+            }
+          }
           summary = s;
           await recorder.log({ step: totalSteps, type: "done", summary: preview(s) });
           await ws?.writeSummary(s);
@@ -160,13 +204,23 @@ o, si la tarea ya está completa o no puedes continuar:
 
         hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
         const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
+        metrics.toolCalls++;
+        const sig = `${action.tool}:${JSON.stringify(action.args ?? {})}`;
+        if (sig === lastSig) metrics.loopHits++;
+        lastSig = sig;
         try {
-          const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks);
+          const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks, policy);
+          if (lastWasError) metrics.recoveries++;
+          lastWasError = false;
           const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
+          hooks.log?.(`✓ ${action.tool}`);
           transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
           transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
           await recorder.log({ step: totalSteps, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: true, result: preview(obs) });
         } catch (e) {
+          metrics.toolErrors++;
+          lastWasError = true;
+          hooks.log?.(`✗ ${action.tool}: ${(e as Error).message}`);
           transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
           await recorder.log({ step: totalSteps, type: "action", tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: false, error: (e as Error).message });
         }
@@ -177,7 +231,10 @@ o, si la tarea ya está completa o no puedes continuar:
 
       hooks.onTaskSummary?.(summary, totalSteps);
       const next = hooks.nextTask ? await hooks.nextTask() : null;
-      if (!next) return { summary, steps: totalSteps };
+      if (!next) {
+        metrics.steps = totalSteps;
+        return { summary, steps: totalSteps, metrics };
+      }
       transcript.push(`NUEVA TAREA (misma sesión del navegador): ${next}`);
     }
   } finally {

@@ -1,0 +1,27 @@
+name: Nightly stealth-check
+
+# El stealth es un objetivo MÓVIL: un update de Playwright/Chrome puede reintroducir una fuga
+# de automatización. Este job corre de noche y FALLA si aparece un leak NUEVO respecto al
+# baseline commiteado (examples/stealth-baseline.json) → alarma automática a la mañana siguiente.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC cada día
+  workflow_dispatch:
+
+jobs:
+  stealth:
+    name: Stealth signals (chromium + firefox)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Instalar navegadores de Playwright
+        run: npx playwright install --with-deps chromium firefox
+      - name: Stealth-check vs baseline
+        run: node examples/stealth-check.mjs
