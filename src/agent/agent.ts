@@ -290,7 +290,14 @@ export class BrowserAgent {
       const messages: Anthropic.MessageParam[] = [
         {
           role: "user",
-          content: [{ type: "text", text: `Tarea: ${this.opts.task}\n\nEmpieza navegando o haciendo un snapshot según corresponda.` }],
+          content: [
+            {
+              type: "text",
+              text: this.opts.startUrl
+                ? `Tarea: ${this.opts.task}\n\nYa navegué a ${this.opts.startUrl} y la página YA está abierta (NO pidas la URL). Empieza con un snapshot para leerla.`
+                : `Tarea: ${this.opts.task}\n\nEmpieza navegando o haciendo un snapshot según corresponda.`,
+            },
+          ],
         },
       ];
 

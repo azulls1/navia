@@ -126,6 +126,13 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     ).join("\n");
 
     const transcript: string[] = [`TAREA: ${opts.task}`];
+    // Grounding: si ya navegamos a una URL, sembramos un snapshot inicial para que el modelo
+    // SEPA que la página está abierta (si no, en modo CLI puede creer que no hay página y pedir
+    // la URL en vez de leerla).
+    if (opts.startUrl) {
+      const snap0 = await driver.snapshot().catch(() => "");
+      if (snap0) transcript.push(`NOTA: ya navegué a ${opts.startUrl} y la página YA está abierta. NO pidas la URL.\nOBSERVACIÓN: ${truncate(snap0, 4000)}`);
+    }
     const maxSteps = opts.maxSteps ?? 60;
 
     // Workspace = carpeta-bitácora (memoria) por tarea. Si se pide, la grabación va también allí.
