@@ -97,13 +97,20 @@ export async function ocrAvailable(): Promise<boolean> {
   return (await getOcr()) != null;
 }
 
-/** Lee el texto de un captcha (PNG base64) con ddddocr local. null si no se pudo. */
+/**
+ * Lee el texto de un captcha (PNG base64) con ddddocr local. null si no se pudo.
+ * Devuelve en MAYÚSCULAS: medido contra captchas reales de CFE, ddddocr acierta los caracteres
+ * pero los da en minúsculas, mientras el sitio los muestra/espera en mayúsculas → uppercasing
+ * cuadra el case (y es inocuo en captchas case-insensitive, que son la mayoría).
+ */
 export async function ocrCaptcha(pngBase64: string): Promise<string | null> {
   const ocr = await getOcr();
   if (!ocr) return null;
   try {
     const raw = await ocr.classification(Buffer.from(pngBase64, "base64"));
-    const text = String(raw ?? "").replace(/[^A-Za-z0-9]/g, "");
+    const text = String(raw ?? "")
+      .replace(/[^A-Za-z0-9]/g, "")
+      .toUpperCase();
     return text || null;
   } catch {
     return null;
