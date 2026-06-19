@@ -6,12 +6,12 @@
     "url": "https://github.com/azulls1/navia",
     "source": "github"
   },
-  "version": "0.24.6",
+  "version": "0.24.7",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "navia-ai",
-      "version": "0.24.6",
+      "version": "0.24.7",
       "transport": { "type": "stdio" },
       "runtimeArguments": [
         { "type": "positional", "value": "mcp", "isRequired": true, "valueHint": "subcomando" }

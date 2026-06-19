@@ -554,6 +554,20 @@ export async function dispatchTool(
       return { text: ok ? "APROBADO por el humano. Puedes proceder." : "RECHAZADO por el humano. No lo hagas; busca otra opción o termina." };
     }
     case "wait_for_human": {
+      // Si el OCR local está activo y la pausa es por un CAPTCHA de imagen, lo resolvemos NOSOTROS
+      // (determinista) en vez de molestar a la persona. Cubre el caso en que el modelo decide pedir
+      // ayuda humana en vez de pulsar 'Ingresar' (donde ya actúa el gate). Da igual qué haga el modelo.
+      if (policy?.captcha === "local") {
+        const cap = await driver.detectTextCaptcha();
+        if (cap.present && cap.empty && cap.imgRef && cap.inputRef) {
+          const text = await ocrCaptcha(await driver.screenshot(cap.imgRef));
+          if (text) {
+            await driver.type(cap.inputRef, text);
+            hooks.log?.(`🔓 Captcha leído con OCR local (ddddocr): "${text}".`);
+            return { text: `Captcha resuelto automáticamente por OCR local: "${text}". NO hace falta el humano. Ahora pulsa 'Ingresar' para enviar el login.` };
+          }
+        }
+      }
       const note = await hooks.waitForHuman(input.reason);
       // Captura semi-automática: la guía del humano se vuelve un tip reutilizable del dominio.
       if (note && hooks.rememberNote) {
