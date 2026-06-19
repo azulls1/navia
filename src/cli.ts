@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.1");
+  .version("0.24.2");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -383,6 +383,22 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     }
     const browser = (await ask("🖥️  Motor del navegador (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
 
+    // Captcha: ofrecer OCR local GRATIS (ddddocr) cuando hay login. Por defecto handoff humano.
+    let captcha: "off" | "local" = base.captcha ?? "off";
+    if (wantsLogin) {
+      const wantsAuto = /^(s|y)/i.test(await ask("🔓 ¿Resolver captcha de imagen automático con OCR local (gratis)? (s/N)", "N"));
+      if (wantsAuto) {
+        captcha = "local";
+        try {
+          const spec = "ddddocr-node";
+          await import(spec);
+          console.log(pc.green("   ✓ OCR local disponible (ddddocr)."));
+        } catch {
+          console.log(pc.yellow("   ⚠️ Falta el OCR local. Instálalo:  npm i ddddocr-node") + pc.dim("  (si no, te pediré el captcha a mano)."));
+        }
+      }
+    }
+
     // Bitácora/registro: detecta bóvedas de Obsidian y deja elegir dónde crear la carpeta de Navia.
     let workspace: boolean | string | undefined = base.workspace;
     const wantsWs = /^(s|y)/i.test(await ask("🧠 ¿Guardar bitácora/registro de la tarea? (S/n)", "S"));
@@ -401,6 +417,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     const eq =
       `navia run ${JSON.stringify(taskPrompt)} --browser ${browser}` +
       (startUrl ? ` --start-url ${startUrl}` : "") +
+      (captcha === "local" ? " --captcha local" : "") +
       ` --provider ${provider}`;
     console.log(pc.dim("\n ─────────────────────────────────────────────"));
     console.log(" Voy a ejecutar:\n   " + pc.cyan(eq));
@@ -419,6 +436,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       provider,
       cliCommand,
       workspace,
+      captcha,
       chat: true, // el wizard es conversacional: al terminar pregunta "¿qué hago ahora?"
       startUrl: startUrl || base.startUrl,
     } as RunFlags);
