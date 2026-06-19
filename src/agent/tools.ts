@@ -379,11 +379,10 @@ export async function dispatchTool(
         if (cap.present && cap.empty) {
           return {
             text:
-              `🚫 BLOQUEADO: hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío${cap.imgRef ? `, imagen ${cap.imgRef}` : ""}). ` +
+              `🚫 BLOQUEADO: hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío). ` +
               `Enviar el login ahora FALLARÁ y la página se recargará — NO entres en bucle.\n` +
-              (policy?.vision
-                ? `• TIENES VISIÓN: haz screenshot(ref="${cap.imgRef ?? "<ref del <img> del captcha>"}"), LEE los caracteres (distingue 0/O, 1/l/I, mayús/minús) y escríbelos con type en ${cap.inputRef ?? "el campo del captcha"}; LUEGO reintenta este click.`
-                : `• NO TIENES VISIÓN (modo CLI): llama UNA vez a wait_for_human pidiendo a la persona que escriba el captcha de la ventana, y reintenta este click DESPUÉS de que confirme.`),
+              `Un CAPTCHA verifica que hay una PERSONA: no lo resuelvas tú. Llama a wait_for_human pidiendo a la ` +
+              `persona que escriba el captcha en la ventana del navegador, y reintenta este click DESPUÉS de que confirme.`,
           };
         }
       }

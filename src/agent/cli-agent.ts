@@ -112,7 +112,10 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     storageState,
     allowDomains: opts.allowDomains,
   });
-  const policy: ToolPolicy = { allowEval: opts.allowEval, vision: false }; // CLI: solo texto, no ve imágenes
+  // El `claude`/`ant` CLI SÍ leen imágenes (les pasamos el PNG): hay visión. Solo el CLI
+  // genérico (NAVIA_CLI_CMD) no sabemos si la tiene → ahí no.
+  const cliHasVision = !process.env.NAVIA_CLI_CMD;
+  const policy: ToolPolicy = { allowEval: opts.allowEval, vision: cliHasVision };
 
   try {
     if (opts.startUrl) await driver.navigate(opts.startUrl);
@@ -153,6 +156,9 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     let lastSig = "";
     let loginContext = false;
     let loginVerifyFails = 0;
+    // Imágenes (p.ej. captcha) capturadas que se adjuntan al SIGUIENTE prompt del CLI para que las lea.
+    let pendingImages: string[] = [];
+    let imgCounter = 0;
     // Bucle de CONVERSACIÓN: resuelve una tarea y, si hay hook nextTask, pide la siguiente
     // reusando el MISMO navegador/sesión y el historial (transcript) acumulado.
     for (;;) {
@@ -175,7 +181,10 @@ o, si la tarea ya está completa o no puedes continuar:
 
         let raw: string;
         try {
-          raw = await cliComplete(prompt, { command: opts.cliCommand, model: opts.model, timeoutMs: 180000 });
+          // Adjunta las imágenes pendientes (p.ej. el captcha capturado) a ESTE prompt y las consume.
+          const attach = pendingImages;
+          pendingImages = [];
+          raw = await cliComplete(prompt, { command: opts.cliCommand, model: opts.model, timeoutMs: 180000 }, attach);
         } catch (e) {
           return { summary: `Error del proveedor CLI: ${(e as Error).message}`, steps: totalSteps };
         }
@@ -235,7 +244,21 @@ o, si la tarea ya está completa o no puedes continuar:
           const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks, policy);
           if (lastWasError) metrics.recoveries++;
           lastWasError = false;
-          const obs = out.text ?? (out.imageBase64 ? "(captura tomada; no visible en modo CLI)" : "(ok)");
+          let obs: string;
+          if (out.imageBase64) {
+            // Guarda la captura en un PNG y la deja pendiente: el CLI la LEERÁ en el próximo turno.
+            const p = path.join(os.tmpdir(), `navia-shot-${process.pid}-${++imgCounter}.png`);
+            try {
+              const { writeFileSync } = await import("node:fs");
+              writeFileSync(p, Buffer.from(out.imageBase64, "base64"));
+              pendingImages.push(p);
+              obs = "(captura tomada y ADJUNTA: la verás como imagen en tu próximo turno; léela y úsala, p.ej. para el texto del captcha)";
+            } catch {
+              obs = "(captura tomada pero no se pudo guardar para leerla)";
+            }
+          } else {
+            obs = out.text ?? "(ok)";
+          }
           hooks.log?.(`✓ ${action.tool}`);
           transcript.push(`ACCIÓN ${step}: ${action.tool} ${JSON.stringify(action.args ?? {})}`);
           transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);

@@ -18,7 +18,7 @@
  *     Usa `ant` si puedes.
  */
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,13 +83,16 @@ function run(
   });
 }
 
-export async function cliComplete(prompt: string, opts?: CliProviderOptions): Promise<string> {
+export async function cliComplete(prompt: string, opts?: CliProviderOptions, imagePaths?: string[]): Promise<string> {
   const envCmd = process.env.NAVIA_CLI_CMD;
+  const imgs = imagePaths?.filter(Boolean) ?? [];
 
-  // Modo 2: CLI genérico definido por el usuario (stdout = respuesta).
+  // Modo 2: CLI genérico definido por el usuario (stdout = respuesta). No sabemos si ve
+  // imágenes → si las hay, al menos le pasamos las rutas como texto (best-effort).
   if (envCmd) {
     const parts = envCmd.split(" ").filter(Boolean);
-    const { out, err, code } = await run(parts[0], parts.slice(1), prompt, { timeoutMs: opts?.timeoutMs });
+    const p = imgs.length ? `${prompt}\n\n(Imágenes disponibles en: ${imgs.join(", ")})` : prompt;
+    const { out, err, code } = await run(parts[0], parts.slice(1), p, { timeoutMs: opts?.timeoutMs });
     if (code !== 0 && !out) throw new Error(`El CLI '${parts[0]}' salió con código ${code}: ${err.slice(0, 300)}`);
     return out.trim();
   }
@@ -100,10 +103,16 @@ export async function cliComplete(prompt: string, opts?: CliProviderOptions): Pr
   // El cuerpo de la petición va por stdin como JSON (JSON.stringify escapa todo de forma
   // segura, evitando problemas de comillas/llaves en argv, sobre todo en Windows).
   if (bin === "ant") {
+    // Con imágenes: bloques de imagen (base64) + texto → ant SÍ ve (Messages API estándar).
+    const content: any[] = imgs.map((p) => ({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: readFileSync(p).toString("base64") },
+    }));
+    content.push({ type: "text", text: prompt });
     const body = JSON.stringify({
       model: opts?.model ?? DEFAULT_MODEL,
       max_tokens: 8192,
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: imgs.length ? content : prompt }],
     });
     // `--transform` saca el primer bloque de texto; `-r` lo imprime sin comillas.
     const args = ["messages", "create", "--transform", 'content.#(type=="text").text', "-r"];
@@ -119,10 +128,15 @@ export async function cliComplete(prompt: string, opts?: CliProviderOptions): Pr
 
   // Modo 3: claude (Claude Code) — fallback. Lo corremos desde un cwd temporal neutro
   // (carpeta reutilizada) para no arrastrar el CLAUDE.md/contexto del proyecto.
+  // Con imágenes: le pasamos las RUTAS y le pedimos leerlas con su herramienta Read (Claude
+  // Code lee PNGs locales perfectamente — verificado).
   const scratch = getScratch();
   {
+    const p = imgs.length
+      ? `${prompt}\n\nIMÁGENES ADJUNTAS — léelas con tu herramienta Read (rutas absolutas) y úsalas para tu respuesta:\n${imgs.join("\n")}`
+      : prompt;
     const args = ["-p", "--output-format", "json"];
-    const { out, err, code } = await run("claude", args, prompt, { timeoutMs: opts?.timeoutMs, cwd: scratch });
+    const { out, err, code } = await run("claude", args, p, { timeoutMs: opts?.timeoutMs, cwd: scratch });
     if (code !== 0 && !out) throw new Error(`El CLI 'claude' salió con código ${code}: ${err.slice(0, 300)}`);
     // Claude Code envuelve la respuesta en JSON: { ..., result: "<texto>" }. Sacamos .result.
     try {
