@@ -155,9 +155,8 @@ async function launchPatchright(opts: LaunchOptions): Promise<BrowserSession> {
   const headless = opts.headless ?? false;
   const base = {
     headless,
-    viewport: headless ? { width: 1920, height: 1080 } : null, // ventana real con visible
+    viewport: { width: 1280, height: 800 }, // viewport fijo y estable (ver nota en launchBrowser)
     slowMo: opts.slowMo ?? 0,
-    args: headless ? [] : ["--start-maximized"],
   };
   let context;
   try {
@@ -182,11 +181,12 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
   // Runtime.enable (eso requiere snapshot CDP / Patchright; ver roadmap), pero quita
   // las banderas de automatización más baratas de detectar.
   const headless = opts.headless ?? false;
-  // Con ventana visible (chromium) usamos la VENTANA REAL maximizada (viewport=null) en vez de
-  // un viewport fijo: muchas páginas responsivas se rompen si el viewport no coincide con la
-  // ventana (la tarjeta de login queda fuera, no aplica el layout). Así se ve como un Chrome
-  // normal. En headless (no hay ventana) usamos un viewport grande y estándar (1920×1080).
-  const realWindow = opts.engine !== "firefox" && !headless;
+  // ESTABILIDAD: usamos Chromium BUNDLED (no el Chrome real del usuario vía channel:"chrome")
+  // y un VIEWPORT FIJO (no viewport:null + --start-maximized). El experimento de v0.22.3 (Chrome
+  // real maximizado) provocaba cierres inesperados del navegador ("Target page/context/browser
+  // has been closed") y render a medias. Para conectar a TU Chrome real existe el motor `chrome`
+  // (CDP). El viewport 1280×800 renderiza bien (form visible) y Playwright ajusta la ventana al
+  // viewport (sin márgenes en blanco). Quien necesite Chrome real coherente: --browser chrome.
   let browser: Browser;
   if (opts.engine === "firefox") {
     browser = await firefox.launch({
@@ -198,22 +198,15 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
       },
     });
   } else {
-    const chromiumArgs = {
+    browser = await chromium.launch({
       headless,
       slowMo: opts.slowMo ?? 0,
-      args: [...CHROMIUM_STEALTH_ARGS, ...(realWindow ? ["--start-maximized"] : [])],
+      args: CHROMIUM_STEALTH_ARGS,
       ignoreDefaultArgs: ["--enable-automation"],
-    };
-    try {
-      // Coherencia de versión: usa el Chrome REAL instalado (canal "chrome") en vez del
-      // Chromium bundled (versión distinta = señal anti-bot). Si no hay Chrome → fallback.
-      browser = await chromium.launch({ ...chromiumArgs, channel: "chrome" });
-    } catch {
-      browser = await chromium.launch(chromiumArgs);
-    }
+    });
   }
   const context = await browser.newContext({
-    viewport: realWindow ? null : { width: 1920, height: 1080 },
+    viewport: { width: 1280, height: 800 }, // fijo y estable; la ventana se ajusta al viewport
     storageState: (opts.storageState as any) ?? undefined,
     acceptDownloads: true,
   });
