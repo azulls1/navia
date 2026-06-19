@@ -11,7 +11,7 @@
 
 # 🌐 Navia
 
-**An AI browser agent that actually logs in.** Give it one sentence — it opens a **real** browser, reads the page, fills forms, **solves text captchas locally for free**, and gets the job done. Just like a person.
+**Automate any repetitive task on any web portal — in plain language.** Fill and submit forms, update records, create entries, download reports, move data between systems, extract tables… Navia opens a **real** browser, logs in (**solving text captchas locally for free**), and does the busywork for you. Just like a person — but tireless.
 
 [![npm version](https://img.shields.io/npm/v/navia-ai?color=cb3837&logo=npm)](https://www.npmjs.com/package/navia-ai)
 [![downloads](https://img.shields.io/npm/dm/navia-ai?color=cb3837&logo=npm)](https://www.npmjs.com/package/navia-ai)
@@ -40,6 +40,7 @@ npm i -g navia-ai   &&   navia
 
 ## 📑 Table of contents
 
+- [What can you automate?](#-what-can-you-automate)
 - [Why Navia](#-why-navia)
 - [Quick start](#-quick-start)
 - [How it works](#-how-it-works)
@@ -57,19 +58,35 @@ npm i -g navia-ai   &&   navia
 
 ---
 
+## 💡 What can you automate?
+
+Anything you'd do by hand in a web portal, described in one sentence:
+
+```bash
+navia "log into my-portal.com and fill the new-client form with: name Ada Lovelace, email ada@x.com, plan Pro"
+navia "update my profile phone number to +52 55 1234 5678 and save"
+navia "download every invoice from this quarter into my Downloads folder"
+navia "go through the pending tickets and mark as resolved the ones older than 30 days"
+navia "register these 20 rows from a CSV as new products" --record macro.jsonl   # then replay daily, free
+navia extract "all clients with name, email and status" --url ... --schema clients.json   # web → typed JSON
+```
+
+…forms, data entry, updates, bulk actions, downloads, scraping to JSON, moving info between systems — the boring repetitive stuff. The login (and its captcha) is just the first step Navia handles on the way.
+
 ## ✨ Why Navia
 
 | | |
 |---|---|
-| 🧠 **One instruction, not a script** | You describe the task; Navia decides the steps. |
-| 🔓 **Text captchas solved automatically & free** | A local OCR model (ddddocr) reads "PCF53"-style captchas **on your machine** — no paid service, no API, not the LLM. On by default; installed for you on first use. |
-| 🪄 **Zero setup, nothing to remember** | Auto-detects if a page needs login (no yes/no prompt), **auto-downloads the browser**, **auto-installs the captcha reader**. You just answer the task. |
-| ✅ **Verifies the login really worked** | Confirms by URL + session links, not by "the form disappeared" — no false "logged in". |
-| 🔐 **Secrets the model never sees** | Encrypted vault for passwords/2FA, **domain-bound** (anti-phishing). The value is injected locally, outside the prompt. |
+| 🧠 **One instruction, not a script** | Describe the task in plain language; Navia discovers the buttons/fields and does the steps. No per-site coding. |
+| 📝 **Forms & data entry on autopilot** | Fills inputs, dropdowns, checkboxes, uploads files, submits, and **confirms it worked** — across multi-step flows. |
+| 🔁 **Do it once, repeat forever** | Record a flow and `replay` it daily **with no LLM, no API key** (free & fast). Self-heals if the site changes. |
+| 🪄 **Zero setup, nothing to remember** | Auto-detects login, **auto-downloads the browser**, **auto-installs the captcha reader**. You just answer the task. |
+| 🔓 **Text captchas solved automatically & free** | Local OCR reads "PCF53"-style captchas **on your machine** — no paid service, no API, not the LLM. On by default. |
+| 🔐 **Secrets the model never sees** | Encrypted vault for passwords/2FA, **domain-bound** (anti-phishing). Injected locally, outside the prompt. |
 | 🛡️ **Anti-Cloudflare built in** | `--browser chrome` connects via CDP to your real Chrome → `navigator.webdriver=false`. Not evasion — it's your own browser. |
 | 👁️ **Reads like a human** | Accessibility tree (not pixels), traverses shadow DOM + cross-origin iframes, stable versioned refs. |
 | 🎛️ **Four primitives — a dial** | `agent` (autonomous), `observe` (propose), `act` (run one, no LLM), `extract` (typed JSON). |
-| 💬 **Conversation mode** | Keeps the browser + session open and takes follow-up commands — log in once, keep going. |
+| 💬 **Conversation mode** | Keeps the browser + session open and takes follow-up commands — do task after task without re-logging in. |
 | 📦 **CLI + library + MCP server** | TypeScript/ESM. Use it from the terminal, your code, or inside Claude Desktop/Code/Cursor. |
 
 ---
@@ -128,7 +145,7 @@ flowchart LR
 
 ## 🔓 The login + captcha flow
 
-This is what makes Navia *actually* log in — fully automatic, deterministic, no loops:
+Most portal automation starts behind a login. This is the part that usually breaks other tools — Navia makes it **fully automatic, deterministic, no loops** — so it can get to the *actual* task (the form, the update, the report):
 
 ```mermaid
 flowchart TD
@@ -383,6 +400,6 @@ Navia drives a real browser with **your** credentials and session. Use it only o
 
 **[npm](https://www.npmjs.com/package/navia-ai)** · **[Issues](https://github.com/azulls1/navia/issues)** · MIT License
 
-Made with ❤️ for people who are tired of doing the same login every day.
+Made with ❤️ for people tired of doing the same portal busywork every day.
 
 </div>
