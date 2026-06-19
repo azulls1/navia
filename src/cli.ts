@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.23.1");
+  .version("0.24.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -67,6 +67,7 @@ interface RunFlags {
   memory?: boolean;
   eval?: boolean;
   allowDomain?: string[];
+  captcha?: "off" | "local";
 }
 
 /**
@@ -199,6 +200,7 @@ async function runTask(task: string, flags: RunFlags) {
       memory: flags.memory,
       allowEval: flags.eval,
       allowDomains: flags.allowDomain,
+      captcha: flags.captcha,
       hooks: {
         log: (msg) => console.log(pc.dim(msg)),
         confirmAction: async (description) => {
@@ -443,6 +445,7 @@ const browserOpt = (cmd: Command) =>
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--chat", "modo conversación: al terminar, mantiene el navegador y pide la siguiente tarea")
     .option("--validate", "validación post-tarea: al terminar, un juez verifica el resultado y reintenta una vez si no se cumplió")
+    .option("--captcha <modo>", "captcha de imagen: off (humano lo escribe, default) | local (OCR ddddocr local, requiere 'npm i ddddocr-node')", "off")
     .option("--no-memory", "no inyectar ni guardar playbooks por dominio (memoria de sitio)")
     .option("--no-eval", "deshabilitar la tool 'evaluate' (ejecución de JS) — recomendado en sitios no confiables")
     .option(

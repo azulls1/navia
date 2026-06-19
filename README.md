@@ -284,7 +284,11 @@ Your instruction ─► BrowserAgent (tool-use loop with Claude)
 
 Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It bundles **no third-party captcha-solving services**.
 
-**Captchas → human handoff (by design).** A CAPTCHA exists to verify a human, and Claude itself declines to solve them — so Navia doesn't try to. What it does instead is make the flow *reliable*: it **detects** the captcha field, **blocks the login submit while it's empty** (no more blind submits or infinite loops), **hands you the window** (`wait_for_human`) so **you** type the captcha, and then **verifies the login actually succeeded** (no false "logged in"). This applies to image captchas, reCAPTCHA/hCaptcha, sliders and 2FA alike. (The CLI/vision plumbing can read page images for legitimate tasks, but captcha-solving is intentionally left to you.)
+**Captchas — reliable by design, with an optional free local solver.** Navia **detects** the captcha field, **blocks the login submit while it's empty** (no blind submits, no infinite loops), and **verifies the login actually succeeded** afterwards (no false "logged in").
+
+- **Default (`--captcha off`):** **human handoff** — Navia hands you the window (`wait_for_human`) and you type the captcha. The LLM is never asked to "solve" a captcha (Claude declines that by policy anyway).
+- **Optional (`--captcha local`):** a **free, local, open-source OCR** model dedicated to text captchas (**ddddocr**, via `npm i ddddocr-node`) reads the captcha image **on your machine** and fills it automatically — no paid service, no API, not the LLM. Verified reading real text captchas. For **your own authorized accounts**. If it can't read it (or isn't installed), Navia falls back to human handoff.
+- **Interactive captchas** (reCAPTCHA grid, hCaptcha, sliders, FunCaptcha) and **2FA** are always handed to you — Navia does not auto-solve those.
 
 ## 📄 License
 

@@ -7,6 +7,7 @@ import type { BrowserDriver, FillField } from "../browser/driver.js";
 import { getSecret, getTotpSecret, getSecretOrigins } from "../secrets/vault.js";
 import { totp } from "../secrets/totp.js";
 import { spotlight, injectionBanner } from "./safety.js";
+import { ocrCaptcha } from "./captcha-ocr.js";
 
 /**
  * Binding anti-phishing/anti-exfiltración: si el secreto tiene orígenes permitidos, el origen
@@ -51,6 +52,8 @@ export interface ToolPolicy {
   /** ¿El proveedor VE imágenes? El provider CLI es solo texto → sin visión, `screenshot` es inútil
    *  (no puede leer la imagen) y solo provoca bucles; se oculta y se delega lo visual a wait_for_human. */
   vision?: boolean;
+  /** Resolución de captcha de imagen: "off" (handoff humano, default) | "local" (OCR ddddocr local). */
+  captcha?: "off" | "local";
 }
 
 /** Catálogo de tools filtrado según la política (lo que VE el modelo). */
@@ -377,12 +380,28 @@ export async function dispatchTool(
       if (looksLikeLoginSubmit) {
         const cap = await driver.detectTextCaptcha();
         if (cap.present && cap.empty) {
+          // Modo OCR local opt-in (--captcha local): un modelo dedicado (ddddocr) lee el captcha y
+          // lo rellena, de forma determinista (no es el LLM). Para la cuenta propia del usuario.
+          if (policy?.captcha === "local" && cap.imgRef && cap.inputRef) {
+            const shot = await driver.screenshot(cap.imgRef);
+            const text = await ocrCaptcha(shot);
+            if (text) {
+              await driver.type(cap.inputRef, text);
+              hooks.log?.(`🔓 Captcha leído con OCR local (ddddocr): "${text}". Reintenta el envío.`);
+              // No hacemos el click aquí: devolvemos el snapshot para que reevalúe y reintente el
+              // envío (si el OCR se equivocó, el login fallará y se recargará otro captcha → reintenta).
+              const snap = await driver.snapshot();
+              return { text: `Captcha rellenado por OCR local: "${text}". Ahora pulsa 'Ingresar'.\n\n--- página actualizada ---\n${snap}` };
+            }
+            // OCR no disponible/ilegible → cae a handoff.
+          }
           return {
             text:
               `🚫 BLOQUEADO: hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío). ` +
               `Enviar el login ahora FALLARÁ y la página se recargará — NO entres en bucle.\n` +
               `Un CAPTCHA verifica que hay una PERSONA: no lo resuelvas tú. Llama a wait_for_human pidiendo a la ` +
-              `persona que escriba el captcha en la ventana del navegador, y reintenta este click DESPUÉS de que confirme.`,
+              `persona que escriba el captcha en la ventana del navegador, y reintenta este click DESPUÉS de que confirme. ` +
+              `(Sugerencia: para OCR local automático y gratis, ejecuta con --captcha local tras 'npm i ddddocr-node'.)`,
           };
         }
       }

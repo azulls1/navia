@@ -115,7 +115,7 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
   // El `claude`/`ant` CLI SÍ leen imágenes (les pasamos el PNG): hay visión. Solo el CLI
   // genérico (NAVIA_CLI_CMD) no sabemos si la tiene → ahí no.
   const cliHasVision = !process.env.NAVIA_CLI_CMD;
-  const policy: ToolPolicy = { allowEval: opts.allowEval, vision: cliHasVision };
+  const policy: ToolPolicy = { allowEval: opts.allowEval, vision: cliHasVision, captcha: opts.captcha };
 
   try {
     if (opts.startUrl) await driver.navigate(opts.startUrl);

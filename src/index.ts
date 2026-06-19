@@ -23,6 +23,7 @@ export type { ExtractOptions } from "./agent/extract.js";
 export { observe, act } from "./agent/primitives.js";
 export type { ObserveAction, ObserveOptions, ActResult } from "./agent/primitives.js";
 export { cliComplete } from "./providers/cli-provider.js";
+export { ocrCaptcha } from "./agent/captcha-ocr.js";
 export { runEval, judgeTask, parseDataset, summarizeReport } from "./agent/eval.js";
 export type { EvalTask, EvalCaseResult, EvalReport, RunEvalOptions } from "./agent/eval.js";
 export { replayMacro } from "./agent/replay.js";

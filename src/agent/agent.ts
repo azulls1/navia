@@ -61,6 +61,8 @@ export interface NaviaOptions {
   allowEval?: boolean;
   /** Allow-list de dominios (red): aborta peticiones fuera de la lista (anti-exfiltración). */
   allowDomains?: string[];
+  /** Captcha de imagen: "off" (handoff humano, default) | "local" (OCR ddddocr local, opt-in). */
+  captcha?: "off" | "local";
 }
 
 /** Métricas de fiabilidad/coste de una corrida (más allá de éxito binario). */
@@ -229,7 +231,7 @@ export class BrowserAgent {
       storageState,
       allowDomains: this.opts.allowDomains,
     });
-    const policy: ToolPolicy = { allowEval: this.opts.allowEval, vision: true }; // API: el modelo VE imágenes
+    const policy: ToolPolicy = { allowEval: this.opts.allowEval, vision: true, captcha: this.opts.captcha }; // API: el modelo VE imágenes
 
     try {
       if (this.opts.startUrl) await driver.navigate(this.opts.startUrl);
