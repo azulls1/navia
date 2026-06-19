@@ -15,8 +15,52 @@
 import { chromium, firefox, type Browser, type BrowserContext } from "playwright";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+
+/**
+ * Descarga el navegador de Playwright (`chromium`/`firefox`) la 1ª vez. Un usuario que solo hizo
+ * `npm i -g navia-ai` no tiene los binarios → Playwright falla con "Executable doesn't exist".
+ * En vez de pedirle que corra `npx playwright install`, lo hacemos por él (una vez).
+ */
+function installPlaywrightBrowser(kind: "chromium" | "firefox"): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const req = createRequire(import.meta.url);
+    let cli: string | null = null;
+    for (const pkg of ["playwright-core", "playwright"]) {
+      try {
+        const candidate = path.join(path.dirname(req.resolve(`${pkg}/package.json`)), "cli.js");
+        if (existsSync(candidate)) {
+          cli = candidate;
+          break;
+        }
+      } catch {
+        /* prueba el siguiente */
+      }
+    }
+    const child = cli
+      ? spawn(process.execPath, [cli, "install", kind], { stdio: "inherit" })
+      : spawn("npx", ["playwright", "install", kind], { stdio: "inherit", shell: process.platform === "win32" });
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`No se pudo descargar el navegador (código ${code}).`))));
+  });
+}
+
+/** Lanza el navegador; si falta el binario, lo descarga (una vez) y reintenta. */
+async function launchOrInstall(kind: "chromium" | "firefox", launch: () => Promise<Browser>): Promise<Browser> {
+  try {
+    return await launch();
+  } catch (e) {
+    const msg = String((e as Error).message || "");
+    if (/Executable doesn't exist|playwright install|please run the following/i.test(msg)) {
+      console.error(`[navia] Descargando el navegador (${kind}) por primera vez… esto puede tardar un par de minutos.`);
+      await installPlaywrightBrowser(kind);
+      return await launch(); // reintenta tras instalar
+    }
+    throw e;
+  }
+}
 
 export type BrowserEngine = "chromium" | "firefox" | "chrome" | "patchright";
 
@@ -189,21 +233,22 @@ export async function launchBrowser(opts: LaunchOptions): Promise<BrowserSession
   // viewport (sin márgenes en blanco). Quien necesite Chrome real coherente: --browser chrome.
   let browser: Browser;
   if (opts.engine === "firefox") {
-    browser = await firefox.launch({
-      headless,
-      slowMo: opts.slowMo ?? 0,
-      firefoxUserPrefs: {
-        "dom.webdriver.enabled": false,
-        "useAutomationExtension": false,
-      },
-    });
+    browser = await launchOrInstall("firefox", () =>
+      firefox.launch({
+        headless,
+        slowMo: opts.slowMo ?? 0,
+        firefoxUserPrefs: { "dom.webdriver.enabled": false, useAutomationExtension: false },
+      }),
+    );
   } else {
-    browser = await chromium.launch({
-      headless,
-      slowMo: opts.slowMo ?? 0,
-      args: CHROMIUM_STEALTH_ARGS,
-      ignoreDefaultArgs: ["--enable-automation"],
-    });
+    browser = await launchOrInstall("chromium", () =>
+      chromium.launch({
+        headless,
+        slowMo: opts.slowMo ?? 0,
+        args: CHROMIUM_STEALTH_ARGS,
+        ignoreDefaultArgs: ["--enable-automation"],
+      }),
+    );
   }
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 }, // fijo y estable; la ventana se ajusta al viewport

@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.8");
+  .version("0.24.9");
 
 interface RunFlags {
   browser: BrowserEngine;
