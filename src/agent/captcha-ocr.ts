@@ -10,24 +10,52 @@
  * No es el LLM resolviendo un captcha: es una herramienta OCR dedicada, para la cuenta PROPIA del
  * usuario y bajo su autorización (opt-in explícito con --captcha local).
  */
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
 
 let _ocr: any = null;
 let _failed = false;
+
+/**
+ * Carga `ddddocr-node` de forma robusta: (1) resolución normal; (2) desde el CWD del usuario
+ * (clave: si Navia corre vía `npx navia-ai`, vive en la caché de npx y NO ve el `ddddocr-node`
+ * que el usuario instaló en su carpeta — aquí lo resolvemos desde process.cwd()).
+ */
+async function loadDdddModule(): Promise<any | null> {
+  const spec = "ddddocr-node";
+  try {
+    return await import(spec);
+  } catch {
+    /* sigue al fallback por CWD */
+  }
+  try {
+    const req = createRequire(pathToFileURL(path.join(process.cwd(), "package.json")).href);
+    const resolved = req.resolve(spec);
+    return await import(pathToFileURL(resolved).href);
+  } catch {
+    return null;
+  }
+}
 
 async function getOcr(): Promise<any | null> {
   if (_ocr) return _ocr;
   if (_failed) return null;
   try {
-    const spec = "ddddocr-node"; // especificador dinámico: opcional, no se resuelve en build
-    const mod = await import(spec);
-    const DdddOcr = mod.DdddOcr ?? mod.default?.DdddOcr;
-    if (!DdddOcr) throw new Error("DdddOcr no encontrado");
+    const mod = await loadDdddModule();
+    const DdddOcr = mod?.DdddOcr ?? mod?.default?.DdddOcr;
+    if (!DdddOcr) throw new Error("ddddocr-node no instalado");
     _ocr = new DdddOcr();
     return _ocr;
   } catch {
     _failed = true; // no instalado → no reintentar en cada paso
     return null;
   }
+}
+
+/** ¿Está disponible el OCR local (ddddocr-node), resolviéndolo también desde el CWD? */
+export async function ocrAvailable(): Promise<boolean> {
+  return (await getOcr()) != null;
 }
 
 /** Lee el texto de un captcha (PNG base64) con ddddocr local. null si no se pudo. */

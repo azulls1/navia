@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.2");
+  .version("0.24.3");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -389,12 +389,14 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       const wantsAuto = /^(s|y)/i.test(await ask("🔓 ¿Resolver captcha de imagen automático con OCR local (gratis)? (s/N)", "N"));
       if (wantsAuto) {
         captcha = "local";
-        try {
-          const spec = "ddddocr-node";
-          await import(spec);
+        const { ocrAvailable } = await import("./agent/captcha-ocr.js");
+        if (await ocrAvailable()) {
           console.log(pc.green("   ✓ OCR local disponible (ddddocr)."));
-        } catch {
-          console.log(pc.yellow("   ⚠️ Falta el OCR local. Instálalo:  npm i ddddocr-node") + pc.dim("  (si no, te pediré el captcha a mano)."));
+        } else {
+          console.log(
+            pc.yellow("   ⚠️ Falta el OCR local. Instálalo:  npm i ddddocr-node") +
+              pc.dim("  (en una carpeta y corre navia ahí, o global; si no, te pediré el captcha a mano)."),
+          );
         }
       }
     }
