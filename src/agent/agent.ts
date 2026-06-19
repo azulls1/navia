@@ -305,6 +305,8 @@ export class BrowserAgent {
       const metrics: NaviaMetrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
       let lastWasError = false;
       let lastSig = "";
+      let loginContext = false; // se activa al usar fill_credential/fill_totp → verificamos el login
+      let loginVerifyFails = 0; // tope de re-inyecciones por login no confirmado (anti-bucle)
       // Bucle de CONVERSACIÓN: cada iteración resuelve una tarea; si hay hook nextTask, al
       // terminar pide la siguiente reusando el MISMO navegador/sesión y el historial completo.
       for (;;) {
@@ -345,6 +347,25 @@ export class BrowserAgent {
               .map((b) => b.text)
               .join("\n")
               .trim();
+            // Verificación DETERMINISTA de login (mata el falso positivo "el form desapareció = entré").
+            if (loginContext && loginVerifyFails < 2) {
+              const outcome = await driver.assessLoginOutcome(this.opts.startUrl);
+              if (outcome.status === "failed") {
+                loginVerifyFails++;
+                this.hooks.log?.(`🔎 Login NO confirmado: ${outcome.detail}`);
+                await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(outcome.detail) });
+                messages.push({
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: `Verificación automática de login: NO tuvo éxito (${outcome.detail}). NO declares éxito. Si hay un CAPTCHA, resuélvelo (con visión: screenshot+leer+type; sin visión: wait_for_human) y reintenta enviar. Si ya fallaron varios intentos, escala con wait_for_human. No afirmes que entraste si no lo confirmaste.`,
+                    },
+                  ],
+                });
+                continue;
+              }
+            }
             // Validador post-tarea: si está activo y aún no se reintentó, verifica el estado
             // real; si no se cumplió, re-inyecta el diagnóstico y sigue (una vez).
             if (this.opts.validate && validateAttempts < 1) {
@@ -376,6 +397,7 @@ export class BrowserAgent {
             const refForLoc = (tu.input as any)?.ref;
             const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
             metrics.toolCalls++;
+            if (tu.name === "fill_credential" || tu.name === "fill_totp") loginContext = true;
             const sig = `${tu.name}:${JSON.stringify(tu.input)}`;
             if (sig === lastSig) metrics.loopHits++;
             lastSig = sig;

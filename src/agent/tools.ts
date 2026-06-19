@@ -366,11 +366,32 @@ export async function dispatchTool(
     }
     case "screenshot":
       return { imageBase64: await driver.screenshot(input.ref) };
-    case "click":
+    case "click": {
+      // Gate anti-bucle: si esto es el botón de enviar el login y hay un captcha de imagen SIN
+      // resolver, bloquea el envío (fallaría y recargaría). Determinista — no depende del prompt.
+      const desc = driver.describeRef(input.ref);
+      const looksLikeLoginSubmit =
+        desc &&
+        /button|link/i.test(desc.role) &&
+        /ingresar|iniciar sesi|inicia sesi|log\s?in|acceder|entrar|sign\s?in|enviar|submit|continuar|aceptar/i.test(desc.name);
+      if (looksLikeLoginSubmit) {
+        const cap = await driver.detectTextCaptcha();
+        if (cap.present && cap.empty) {
+          return {
+            text:
+              `🚫 BLOQUEADO: hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío${cap.imgRef ? `, imagen ${cap.imgRef}` : ""}). ` +
+              `Enviar el login ahora FALLARÁ y la página se recargará — NO entres en bucle.\n` +
+              (policy?.vision
+                ? `• TIENES VISIÓN: haz screenshot(ref="${cap.imgRef ?? "<ref del <img> del captcha>"}"), LEE los caracteres (distingue 0/O, 1/l/I, mayús/minús) y escríbelos con type en ${cap.inputRef ?? "el campo del captcha"}; LUEGO reintenta este click.`
+                : `• NO TIENES VISIÓN (modo CLI): llama UNA vez a wait_for_human pidiendo a la persona que escriba el captcha de la ventana, y reintenta este click DESPUÉS de que confirme.`),
+          };
+        }
+      }
       return wrapAction(driver, async () => {
         await driver.click(input.ref);
         return `Clic en ${input.ref}.`;
       });
+    }
     case "type":
       return wrapAction(
         driver,

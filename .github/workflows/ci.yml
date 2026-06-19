@@ -45,5 +45,7 @@ jobs:
         run: node examples/mcp-smoke.mjs
       - name: Ejecutar smoke test (iframes)
         run: node examples/oopif-smoke.mjs
+      - name: Ejecutar smoke test (captcha/login)
+        run: node examples/captcha-smoke.mjs
       - name: Ejecutar smoke test (replay determinista)
         run: node examples/replay-smoke.mjs

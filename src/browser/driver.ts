@@ -16,6 +16,24 @@ import { takeSnapshot, REF_ATTR } from "./snapshot.js";
 import { parseAxTree, type AXNode } from "./cdp-snapshot.js";
 import { launchBrowser, closeSession, type BrowserSession, type LaunchOptions, type BrowserEngine } from "./launch.js";
 
+/**
+ * Preprocesa un recorte (típicamente un captcha) para que el LLM lo lea mejor: amplía 4x con
+ * lanczos + estira contraste + sharpen suave. NO binariza ni borra líneas (eso es para Tesseract;
+ * un VLM lee mejor el trazo con su ruido). `sharp` es OPCIONAL (no es dependencia): si no está
+ * instalado, devuelve la imagen tal cual. Para activarlo: `npm i sharp`.
+ */
+async function preprocessForOcr(buf: Buffer): Promise<Buffer> {
+  try {
+    const spec = "sharp"; // especificador dinámico: opcional, no se resuelve en build
+    const sharp = (await import(spec)).default;
+    const meta = await sharp(buf).metadata();
+    const targetWidth = Math.min(900, Math.max(500, (meta.width ?? 200) * 4));
+    return await sharp(buf).resize({ width: targetWidth, kernel: sharp.kernel.lanczos3 }).normalise().sharpen({ sigma: 1 }).png().toBuffer();
+  } catch {
+    return buf; // sin sharp → imagen original (el LLM suele leerla igual)
+  }
+}
+
 export interface FillField {
   ref: string;
   value: string;
@@ -473,7 +491,8 @@ export class BrowserDriver {
             type: "png",
             clip: { x: Math.max(0, r.x), y: Math.max(0, r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) },
           });
-          return buf.toString("base64");
+          // Recorte de elemento (típicamente un captcha) → ampliar/realzar para que el LLM lo lea mejor.
+          return (await preprocessForOcr(buf)).toString("base64");
         }
       } catch {
         /* si no se puede recortar, cae a la captura completa */
@@ -511,6 +530,115 @@ export class BrowserDriver {
     } catch {
       return null;
     }
+  }
+
+  /** Ref versionado (`v<N>:backendNodeId`) del 1er elemento que matchee el selector, vía CDP. */
+  private async refForSelector(selector: string): Promise<string | undefined> {
+    if (!this.cdp) return undefined;
+    try {
+      const doc = (await this.cdp.send("DOM.getDocument", { depth: 0 } as any)) as any;
+      const q = (await this.cdp.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector } as any)) as any;
+      if (!q?.nodeId) return undefined;
+      const d = (await this.cdp.send("DOM.describeNode", { nodeId: q.nodeId } as any)) as any;
+      const backendId = d?.node?.backendNodeId;
+      return backendId != null ? `v${this.snapshotVersion}:${backendId}` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Detecta un CAPTCHA de TEXTO-EN-IMAGEN propio (un `<input>` de texto vacío junto a un `<img>`
+   * de captcha, con label/atributos tipo "ingresa el texto de la imagen"/"txtCaptcha"). El AX-tree
+   * NO ve las `<img>` ni el tipo de input, por eso vamos al DOM. Devuelve si está presente, si está
+   * VACÍO (de forma determinista) y los refs del input y del `<img>` para resolverlo/recortarlo.
+   * Esto cierra el hueco de detectChallenge (que solo ve captchas de terceros en iframes).
+   */
+  async detectTextCaptcha(): Promise<{ present: boolean; empty: boolean; imgRef?: string; inputRef?: string }> {
+    try {
+      const found = (await this.page.evaluate(() => {
+        const norm = (s: string | null | undefined) => (s || "").toLowerCase();
+        const reAttr = /captcha|c[oó]?digo|codigo|imagen|image|verif|seguridad|security|caracteres|characters/i;
+        const reLabel = /(enter|type|ingresa|escribe|introduce)[\s\S]{0,30}(text|texto|c[oó]digo|code|characters|caracteres)|(texto|c[oó]digo|code)[\s\S]{0,20}(imagen|image)|security code|c[oó]digo de seguridad/i;
+        const isCapImg = (img: HTMLImageElement) => {
+          const w = img.naturalWidth || img.width,
+            h = img.naturalHeight || img.height;
+          if (!w || !h) return false;
+          const ratio = w / h,
+            src = norm(img.src);
+          return w >= 50 && w <= 420 && h >= 16 && h <= 160 && ratio > 1.4 && !/(logo|icon|sprite|avatar|banner|header)/.test(src);
+        };
+        const inputs = Array.from(document.querySelectorAll("input")).filter((i) => {
+          const t = (i.getAttribute("type") || "text").toLowerCase();
+          return ["text", "", "tel", "number"].includes(t);
+        }) as HTMLInputElement[];
+        let best: { inp: HTMLInputElement; img: HTMLImageElement | null; score: number } | null = null;
+        for (const inp of inputs) {
+          const attrs = norm([inp.name, inp.id, inp.className, inp.placeholder, inp.getAttribute("aria-label")].join(" "));
+          let score = reAttr.test(attrs) ? 2 : 0;
+          let labelText = "";
+          if (inp.id) {
+            const l = document.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+            if (l) labelText = norm(l.textContent);
+          }
+          const ctx = norm((inp.closest("div,td,fieldset,form,section") as HTMLElement | null)?.textContent);
+          if (reLabel.test(labelText) || reLabel.test(ctx)) score += 2;
+          const scope = (inp.closest("div,td,fieldset,form,section") as HTMLElement | null) || document.body;
+          const img = (Array.from(scope.querySelectorAll("img")) as HTMLImageElement[]).find(isCapImg) || null;
+          if (img) score += 1; // la imagen corrobora pero no basta sola (evita falsos positivos)
+          // Requiere señal fuerte de captcha (atributo o label), no solo "input cerca de img".
+          const strong = reAttr.test(attrs) || reLabel.test(labelText) || reLabel.test(ctx);
+          if (strong && (!best || score > best.score)) best = { inp, img, score };
+        }
+        if (!best) return { present: false, empty: false, hasImg: false };
+        best.inp.setAttribute("data-navia-cap-input", "1");
+        if (best.img) best.img.setAttribute("data-navia-cap-img", "1");
+        return { present: true, empty: (best.inp.value || "").trim() === "", hasImg: !!best.img };
+      })) as { present: boolean; empty: boolean; hasImg: boolean };
+
+      if (!found?.present) return { present: false, empty: false };
+      const inputRef = await this.refForSelector("[data-navia-cap-input]");
+      const imgRef = found.hasImg ? await this.refForSelector("[data-navia-cap-img]") : undefined;
+      await this.page
+        .evaluate(() =>
+          document.querySelectorAll("[data-navia-cap-input],[data-navia-cap-img]").forEach((e) => {
+            e.removeAttribute("data-navia-cap-input");
+            e.removeAttribute("data-navia-cap-img");
+          }),
+        )
+        .catch(() => {});
+      return { present: true, empty: !!found.empty, imgRef, inputRef };
+    } catch {
+      return { present: false, empty: false };
+    }
+  }
+
+  /**
+   * Verifica de forma DETERMINISTA si un login tuvo éxito (en vez de fiarse del "parece que entró"
+   * del modelo, que daba falsos positivos). `loginUrl` = la URL del formulario de login (baseline).
+   *  - failed: hay mensaje de error/captcha incorrecto, o sigue el campo password.
+   *  - success: ya NO hay password Y (enlace de sesión visible o URL salió del login).
+   *  - unknown: no se puede afirmar.
+   */
+  async assessLoginOutcome(loginUrl?: string): Promise<{ status: "success" | "failed" | "unknown"; detail: string }> {
+    const url = this.page.url();
+    let stillPassword = false;
+    try {
+      stillPassword = await this.page.evaluate(() => !!document.querySelector('input[type="password"]'));
+    } catch {
+      /* noop */
+    }
+    const text = (await this.readText().catch(() => "")).toLowerCase();
+    const errorRe =
+      /captcha\s+(incorrect|inv[aá]lid|no coincide|err[oó]ne)|c[oó]digo\s+(incorrect|inv[aá]lid)|texto[\s\S]{0,20}(incorrect|no coincide)|usuario o contrase|credenciales\s+(inv|incorrect)|datos incorrectos|intente de nuevo|vuelva? a intentar|inicio de sesi[oó]n fallid|incorrect (password|username)|invalid (credentials|captcha)/i;
+    const sessionRe = /cerrar sesi[oó]n|cerrar sesion|logout|log out|sign\s?out|mi cuenta|mi perfil|salir\b/i;
+    const loginUrlRe = /login|signin|sign-in|acceso|autenticaci|iniciar.?sesi/i;
+    if (errorRe.test(text)) return { status: "failed", detail: "la página muestra un error de login/captcha" };
+    const movedAway = !!loginUrl && url !== loginUrl && !loginUrlRe.test(url.toLowerCase());
+    if (!stillPassword && (sessionRe.test(text) || movedAway))
+      return { status: "success", detail: sessionRe.test(text) ? "enlace de sesión visible y sin formulario de login" : "saliste de la URL de login y no hay formulario" };
+    if (stillPassword) return { status: "failed", detail: "sigues en el formulario de login (el campo de contraseña sigue presente)" };
+    return { status: "unknown", detail: "no se pudo confirmar el resultado del login" };
   }
 
   async navigateBack(): Promise<void> {

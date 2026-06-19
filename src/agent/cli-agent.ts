@@ -151,6 +151,8 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     const metrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
     let lastWasError = false;
     let lastSig = "";
+    let loginContext = false;
+    let loginVerifyFails = 0;
     // Bucle de CONVERSACIÓN: resuelve una tarea y, si hay hook nextTask, pide la siguiente
     // reusando el MISMO navegador/sesión y el historial (transcript) acumulado.
     for (;;) {
@@ -186,6 +188,19 @@ o, si la tarea ya está completa o no puedes continuar:
         }
         if (action.done) {
           const s: string = action.summary ?? "(sin resumen)";
+          // Verificación DETERMINISTA de login (mata el falso positivo de "entré" sin haber entrado).
+          if (loginContext && loginVerifyFails < 2) {
+            const outcome = await driver.assessLoginOutcome(opts.startUrl);
+            if (outcome.status === "failed") {
+              loginVerifyFails++;
+              hooks.log?.(`🔎 Login NO confirmado: ${outcome.detail}`);
+              await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(outcome.detail) });
+              transcript.push(
+                `VERIFICACIÓN DE LOGIN: NO tuvo éxito (${outcome.detail}). NO declares éxito. Si hay un CAPTCHA y NO tienes visión, llama a wait_for_human para que la persona lo escriba y reintenta enviar. No afirmes que entraste si no lo confirmaste.`,
+              );
+              continue;
+            }
+          }
           // Validador post-tarea (opt-in): verifica el estado real; si no se cumplió, re-inyecta.
           if (opts.validate && validateAttempts < 1) {
             validateAttempts++;
@@ -212,6 +227,7 @@ o, si la tarea ya está completa o no puedes continuar:
         hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
         const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
         metrics.toolCalls++;
+        if (action.tool === "fill_credential" || action.tool === "fill_totp") loginContext = true;
         const sig = `${action.tool}:${JSON.stringify(action.args ?? {})}`;
         if (sig === lastSig) metrics.loopHits++;
         lastSig = sig;

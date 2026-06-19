@@ -282,7 +282,9 @@ Your instruction ─► BrowserAgent (tool-use loop with Claude)
 
 ## ⚠️ Responsible use
 
-Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It bundles **no third-party captcha-solving services**; for image (text-in-image) captchas on your own login it can try to read them with the model's **own vision** (requires `--provider api`, i.e. an API key), and otherwise hands you the window. For 2FA it hands you the window.
+Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It bundles **no third-party captcha-solving services**.
+
+**Image (text-in-image) captchas, your own login.** Navia detects the captcha field and **blocks the login submit while it's empty** (no more blind submits or loops), then: with **vision** (`--provider api`) it screenshots the captcha, reads the characters and types them; **without vision** (free CLI provider, text-only) it hands you the window via `wait_for_human`. After submitting it **verifies the login actually succeeded** (no false "logged in"). Interactive/behavioral captchas (reCAPTCHA grid, hCaptcha, FunCaptcha, sliders) and 2FA are handed to you — Navia does not auto-solve those. Optional: `npm i sharp` upscales the captcha crop for sharper OCR.
 
 ## 📄 License
 
