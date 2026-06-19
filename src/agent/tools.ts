@@ -304,6 +304,43 @@ export const TOOL_DEFINITIONS: Anthropic.Tool[] = [
 ];
 
 /**
+ * Resuelve automáticamente un CAPTCHA de texto-en-imagen vacío con OCR local (si --captcha local),
+ * ANTES de enviar el formulario. Determinista, no depende del nombre del botón ni del prompt: si hay
+ * un captcha vacío y vamos a enviar, lo rellenamos. Tope por corrida (backstop anti-bucle): tras
+ * MAX_CAPTCHA_TRIES deja de auto-resolver y pide humano.
+ */
+const MAX_CAPTCHA_TRIES = 4;
+const captchaTries = new WeakMap<BrowserDriver, number>();
+
+async function autoSolveCaptcha(
+  driver: BrowserDriver,
+  policy: ToolPolicy | undefined,
+  hooks: AgentHooks,
+): Promise<{ solved: boolean; blocked?: string }> {
+  const cap = await driver.detectTextCaptcha();
+  if (!cap.present || !cap.empty) return { solved: false }; // no hay captcha vacío → nada que hacer
+  if (policy?.captcha !== "local") {
+    return {
+      solved: false,
+      blocked:
+        `🚫 Hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío) y el OCR automático está desactivado. ` +
+        `Llama a wait_for_human para que la persona lo escriba y reintenta. (Para resolverlo solo y gratis: --captcha local.)`,
+    };
+  }
+  if (!cap.imgRef || !cap.inputRef) return { solved: false };
+  const tries = captchaTries.get(driver) ?? 0;
+  if (tries >= MAX_CAPTCHA_TRIES) {
+    return { solved: false, blocked: `🚫 El captcha falló ${tries} veces con OCR. Llama a wait_for_human para que la persona lo escriba en la ventana.` };
+  }
+  const text = await ocrCaptcha(await driver.screenshot(cap.imgRef));
+  if (!text) return { solved: false }; // OCR no instalado/ilegible → el llamador decide (handoff)
+  await driver.type(cap.inputRef, text);
+  captchaTries.set(driver, tries + 1);
+  hooks.log?.(`🔓 Captcha leído con OCR local (ddddocr): "${text}".`);
+  return { solved: true };
+}
+
+/**
  * Ejecuta una acción basada en ref; si falla (ref caduco/efímero o elemento ausente),
  * re-lee la página y devuelve un snapshot fresco para que el siguiente turno reintente
  * con refs vigentes — recuperación sin escalar a un error genérico.
@@ -370,47 +407,22 @@ export async function dispatchTool(
     case "screenshot":
       return { imageBase64: await driver.screenshot(input.ref) };
     case "click": {
-      // Gate anti-bucle: si esto es el botón de enviar el login y hay un captcha de imagen SIN
-      // resolver, bloquea el envío (fallaría y recargaría). Determinista — no depende del prompt.
-      const desc = driver.describeRef(input.ref);
-      const looksLikeLoginSubmit =
-        desc &&
-        /button|link/i.test(desc.role) &&
-        /ingresar|iniciar sesi|inicia sesi|log\s?in|acceder|entrar|sign\s?in|enviar|submit|continuar|aceptar/i.test(desc.name);
-      if (looksLikeLoginSubmit) {
-        const cap = await driver.detectTextCaptcha();
-        if (cap.present && cap.empty) {
-          // Modo OCR local opt-in (--captcha local): un modelo dedicado (ddddocr) lee el captcha y
-          // lo rellena, de forma determinista (no es el LLM). Para la cuenta propia del usuario.
-          if (policy?.captcha === "local" && cap.imgRef && cap.inputRef) {
-            const shot = await driver.screenshot(cap.imgRef);
-            const text = await ocrCaptcha(shot);
-            if (text) {
-              await driver.type(cap.inputRef, text);
-              hooks.log?.(`🔓 Captcha leído con OCR local (ddddocr): "${text}". Reintenta el envío.`);
-              // No hacemos el click aquí: devolvemos el snapshot para que reevalúe y reintente el
-              // envío (si el OCR se equivocó, el login fallará y se recargará otro captcha → reintenta).
-              const snap = await driver.snapshot();
-              return { text: `Captcha rellenado por OCR local: "${text}". Ahora pulsa 'Ingresar'.\n\n--- página actualizada ---\n${snap}` };
-            }
-            // OCR no disponible/ilegible → cae a handoff.
-          }
-          return {
-            text:
-              `🚫 BLOQUEADO: hay un CAPTCHA de imagen SIN resolver (campo ${cap.inputRef ?? "del captcha"} vacío). ` +
-              `Enviar el login ahora FALLARÁ y la página se recargará — NO entres en bucle.\n` +
-              `Un CAPTCHA verifica que hay una PERSONA: no lo resuelvas tú. Llama a wait_for_human pidiendo a la ` +
-              `persona que escriba el captcha en la ventana del navegador, y reintenta este click DESPUÉS de que confirme. ` +
-              `(Sugerencia: para OCR local automático y gratis, ejecuta con --captcha local tras 'npm i ddddocr-node'.)`,
-          };
-        }
-      }
+      // Antes de hacer click (que suele ser el envío del login), si hay un captcha de imagen vacío
+      // lo resolvemos AUTOMÁTICAMENTE (OCR local) en el MISMO paso, sin depender del nombre del botón.
+      // Si no se puede y captcha=off / OCR ausente, bloqueamos y guiamos a wait_for_human.
+      const cap = await autoSolveCaptcha(driver, policy, hooks);
+      if (cap.blocked) return { text: cap.blocked };
       return wrapAction(driver, async () => {
         await driver.click(input.ref);
         return `Clic en ${input.ref}.`;
       });
     }
-    case "type":
+    case "type": {
+      // Si va a ENVIAR (submit:true = pulsar Enter) y hay un captcha de imagen vacío, resuélvelo antes.
+      if (input.submit) {
+        const cap = await autoSolveCaptcha(driver, policy, hooks);
+        if (cap.blocked) return { text: cap.blocked };
+      }
       return wrapAction(
         driver,
         async () => {
@@ -419,6 +431,7 @@ export async function dispatchTool(
         },
         { verifyChange: false },
       );
+    }
     case "fill_form":
       return wrapAction(
         driver,
@@ -498,9 +511,15 @@ export async function dispatchTool(
         },
         { verifyChange: false },
       );
-    case "press_key":
+    case "press_key": {
+      // Enter suele enviar el formulario → si hay captcha de imagen vacío, resuélvelo antes.
+      if (/^enter$/i.test(String(input.key ?? ""))) {
+        const cap = await autoSolveCaptcha(driver, policy, hooks);
+        if (cap.blocked) return { text: cap.blocked };
+      }
       await driver.pressKey(input.key);
       return { text: `Tecla ${input.key} pulsada.` };
+    }
     case "evaluate": {
       const result = await driver.evaluate(input.code);
       const json = JSON.stringify(result, null, 2).slice(0, 6000);
@@ -554,19 +573,11 @@ export async function dispatchTool(
       return { text: ok ? "APROBADO por el humano. Puedes proceder." : "RECHAZADO por el humano. No lo hagas; busca otra opción o termina." };
     }
     case "wait_for_human": {
-      // Si el OCR local está activo y la pausa es por un CAPTCHA de imagen, lo resolvemos NOSOTROS
-      // (determinista) en vez de molestar a la persona. Cubre el caso en que el modelo decide pedir
-      // ayuda humana en vez de pulsar 'Ingresar' (donde ya actúa el gate). Da igual qué haga el modelo.
-      if (policy?.captcha === "local") {
-        const cap = await driver.detectTextCaptcha();
-        if (cap.present && cap.empty && cap.imgRef && cap.inputRef) {
-          const text = await ocrCaptcha(await driver.screenshot(cap.imgRef));
-          if (text) {
-            await driver.type(cap.inputRef, text);
-            hooks.log?.(`🔓 Captcha leído con OCR local (ddddocr): "${text}".`);
-            return { text: `Captcha resuelto automáticamente por OCR local: "${text}". NO hace falta el humano. Ahora pulsa 'Ingresar' para enviar el login.` };
-          }
-        }
+      // Si el modelo pide ayuda humana por un CAPTCHA de imagen y el OCR local está activo, lo
+      // resolvemos NOSOTROS (mismo helper que el submit) en vez de molestar a la persona.
+      const cap = await autoSolveCaptcha(driver, policy, hooks);
+      if (cap.solved) {
+        return { text: "Captcha resuelto automáticamente por OCR local. NO hace falta el humano. Ahora pulsa 'Ingresar' para enviar el login." };
       }
       const note = await hooks.waitForHuman(input.reason);
       // Captura semi-automática: la guía del humano se vuelve un tip reutilizable del dominio.

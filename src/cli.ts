@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.10");
+  .version("0.25.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -255,7 +255,7 @@ async function runTask(task: string, flags: RunFlags) {
       provider: flags.provider,
       cliCommand: flags.cliCommand,
       record: flags.record,
-      workspace: flags.workspace ?? cfg.workspace,
+      workspace: flags.workspace === false ? false : (flags.workspace ?? cfg.workspace), // false = "no" explícito; no reactivar desde cfg
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
       validate: flags.validate,
       memory: flags.memory,
@@ -469,7 +469,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     if (wantsWs) {
       workspace = await chooseWorkspace(rl); // reusa el mismo readline; lista vaults de Obsidian + carpeta + ruta
     } else {
-      workspace = undefined;
+      workspace = false; // elección EXPLÍCITA de "no" → runTask no debe reactivarla desde cfg
     }
 
     // Arma la tarea: si hay login, instruye usar fill_credential (la contraseña nunca pasa por el modelo).
@@ -527,7 +527,7 @@ const browserOpt = (cmd: Command) =>
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
     .option("--chat", "modo conversación: al terminar, mantiene el navegador y pide la siguiente tarea")
     .option("--validate", "validación post-tarea: al terminar, un juez verifica el resultado y reintenta una vez si no se cumplió")
-    .option("--captcha <modo>", "captcha de imagen: off (humano lo escribe, default) | local (OCR ddddocr local, requiere 'npm i ddddocr-node')", "off")
+    .option("--captcha <modo>", "captcha de imagen: local (OCR local automático, default) | off (lo escribe la persona)", "local")
     .option("--no-memory", "no inyectar ni guardar playbooks por dominio (memoria de sitio)")
     .option("--no-eval", "deshabilitar la tool 'evaluate' (ejecución de JS) — recomendado en sitios no confiables")
     .option(

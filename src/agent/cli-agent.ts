@@ -205,7 +205,7 @@ o, si la tarea ya está completa o no puedes continuar:
               hooks.log?.(`🔎 Login NO confirmado: ${outcome.detail}`);
               await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(outcome.detail) });
               transcript.push(
-                `VERIFICACIÓN DE LOGIN: NO tuvo éxito (${outcome.detail}). NO declares éxito. Si hay un CAPTCHA y NO tienes visión, llama a wait_for_human para que la persona lo escriba y reintenta enviar. No afirmes que entraste si no lo confirmaste.`,
+                `VERIFICACIÓN DE LOGIN: NO tuvo éxito (${outcome.detail}). NO declares éxito. Reintenta así: 1 snapshot → reescribe el usuario → fill_credential la contraseña → pulsa 'Ingresar' (el sistema rellena el captcha solo). NO leas ni teclees el captcha tú. Si tras 2-3 intentos sigue fallando, resume el fallo y termina.`,
               );
               continue;
             }

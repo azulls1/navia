@@ -14,7 +14,8 @@
  */
 export { BrowserAgent, runNavia } from "./agent/agent.js";
 export type { NaviaOptions, NaviaResult, NaviaMetrics } from "./agent/agent.js";
-export type { AgentHooks } from "./agent/tools.js";
+export type { AgentHooks, ToolPolicy } from "./agent/tools.js";
+export { dispatchTool, toolDefinitions, TOOL_DEFINITIONS } from "./agent/tools.js";
 export { BrowserDriver } from "./browser/driver.js";
 export type { BrowserEngine, LaunchOptions } from "./browser/launch.js";
 export { buildSystemPrompt } from "./agent/system-prompt.js";

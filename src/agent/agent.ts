@@ -361,7 +361,7 @@ export class BrowserAgent {
                   content: [
                     {
                       type: "text",
-                      text: `Verificación automática de login: NO tuvo éxito (${outcome.detail}). NO declares éxito. Si hay un CAPTCHA, resuélvelo (con visión: screenshot+leer+type; sin visión: wait_for_human) y reintenta enviar. Si ya fallaron varios intentos, escala con wait_for_human. No afirmes que entraste si no lo confirmaste.`,
+                      text: `Verificación automática de login: NO tuvo éxito (${outcome.detail}). NO declares éxito. Reintenta así: 1 snapshot → reescribe el usuario → fill_credential la contraseña → pulsa 'Ingresar' (el sistema rellena el captcha solo). NO leas ni teclees el captcha tú. Si tras 2-3 intentos sigue fallando, resume el fallo y termina.`,
                     },
                   ],
                 });
@@ -443,6 +443,7 @@ export class BrowserAgent {
           await recorder.log({ step: totalSteps, type: "done", summary: "max-steps" });
         }
 
+        await ws?.writeSummary(summary); // resumen.md en la bitácora (igual que el loop CLI)
         this.hooks.onTaskSummary?.(summary, totalSteps);
         const next = this.hooks.nextTask ? await this.hooks.nextTask() : null;
         if (!next) {
