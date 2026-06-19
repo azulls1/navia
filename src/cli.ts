@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.4");
+  .version("0.24.5");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -149,6 +149,63 @@ function attachEscToExit(rl: ReturnType<typeof createInterface>): () => void {
   };
   input.on("keypress", onKey);
   return () => input.removeListener("keypress", onKey);
+}
+
+/**
+ * Baja el HTML de una URL con un GET de bajo nivel. Usa `rejectUnauthorized:false` SOLO para esta
+ * sonda de detección (lee HTML público para ver si hay login; NO envía credenciales): algunos
+ * sitios (p.ej. CFE) tienen cadenas de certificado que el fetch estricto de Node rechaza pero el
+ * navegador acepta. Sigue hasta 3 redirecciones; timeout 8s; corta a ~600KB.
+ */
+async function fetchHtml(url: string, redirects = 3): Promise<string> {
+  const { request } = await import(url.startsWith("https") ? "node:https" : "node:http");
+  return new Promise((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        rejectUnauthorized: false,
+        timeout: 8000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml",
+        },
+      },
+      (res: any) => {
+        const loc = res.headers.location;
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc && redirects > 0) {
+          res.resume();
+          resolve(fetchHtml(new URL(loc, url).href, redirects - 1));
+          return;
+        }
+        let data = "";
+        res.on("data", (c: Buffer) => {
+          data += c.toString();
+          if (data.length > 600_000) req.destroy();
+        });
+        res.on("end", () => resolve(data));
+      },
+    );
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+/**
+ * Detección rápida (sin abrir navegador) de si una página tiene login: baja el HTML y busca un
+ * campo de contraseña o palabras clave. true si detecta login; false/null si no (en cuyo caso el
+ * wizard pregunta, por si es una SPA que renderiza el login con JS).
+ */
+async function detectLoginOnPage(url?: string): Promise<boolean | null> {
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  try {
+    const html = (await fetchHtml(url)).toLowerCase();
+    if (/type\s*=\s*["']?password/.test(html)) return true;
+    if (/iniciar sesi[oó]n|inicia sesi[oó]n|log\s?in|sign\s?in|contrase|usuario y contrase|acceder/.test(html)) return true;
+    return false;
+  } catch {
+    return null; // no se pudo bajar (red/SPA) → que el wizard pregunte
+  }
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -344,8 +401,16 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       }
     }
 
-    const startUrl = await ask("🌐 ¿URL de inicio?");
-    const wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
+    const startUrl = (await ask("🌐 ¿URL de inicio?")).replace(/[\s\\]+$/, ""); // quita \ o espacios al final
+    // Detección automática de login: si la página tiene un formulario de login, NO preguntamos.
+    let wantsLogin: boolean;
+    const detected = await detectLoginOnPage(startUrl);
+    if (detected) {
+      console.log(pc.dim("🔐 Detecté un formulario de login en la página."));
+      wantsLogin = true;
+    } else {
+      wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
+    }
 
     let user = "";
     let secretKey = "";
