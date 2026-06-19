@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.9");
+  .version("0.24.10");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -198,14 +198,18 @@ async function fetchHtml(url: string, redirects = 3): Promise<string> {
  */
 async function detectLoginOnPage(url?: string): Promise<boolean | null> {
   if (!url || !/^https?:\/\//i.test(url)) return null;
-  try {
-    const html = (await fetchHtml(url)).toLowerCase();
-    if (/type\s*=\s*["']?password/.test(html)) return true;
-    if (/iniciar sesi[oó]n|inicia sesi[oó]n|log\s?in|sign\s?in|contrase|usuario y contrase|acceder/.test(html)) return true;
-    return false;
-  } catch {
-    return null; // no se pudo bajar (red/SPA) → que el wizard pregunte
+  // 2 intentos: la sonda de red puede fallar puntualmente (timeout/TLS) → no queremos un falso "no".
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const html = (await fetchHtml(url)).toLowerCase();
+      if (/type\s*=\s*["']?password/.test(html)) return true;
+      if (/iniciar sesi[oó]n|inicia sesi[oó]n|log\s?in|sign\s?in|contrase|usuario y contrase|acceder/.test(html)) return true;
+      return false;
+    } catch {
+      /* reintenta una vez */
+    }
   }
+  return null; // no se pudo bajar (red/SPA) → flujo de "usuario opcional"
 }
 
 async function runTask(task: string, flags: RunFlags) {
@@ -402,20 +406,17 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     }
 
     const startUrl = (await ask("🌐 ¿URL de inicio?")).replace(/[\s\\]+$/, ""); // quita \ o espacios al final
-    // Detección automática de login: si la página tiene un formulario de login, NO preguntamos.
-    let wantsLogin: boolean;
+    // Login: NO preguntamos "¿requiere login? s/N". Sondeamos la página; si detectamos login, lo
+    // decimos; si la sonda no concluye (red/SPA), igual ofrecemos credenciales (Enter = omitir).
+    // Así es consistente: pidas o no usuario, decide el flujo — sin un paso confuso que a veces sale.
     const detected = await detectLoginOnPage(startUrl);
-    if (detected) {
-      console.log(pc.dim("🔐 Detecté un formulario de login en la página."));
-      wantsLogin = true;
-    } else {
-      wantsLogin = /^(s|y)/i.test(await ask("🔐 ¿Requiere login? (s/N)", "N"));
-    }
+    console.log(detected ? pc.dim("🔐 Detecté un formulario de login en la página.") : pc.dim("🔐 ¿Vas a iniciar sesión? Si sí, pon el usuario; si no, deja vacío (Enter)."));
 
     let user = "";
     let secretKey = "";
+    user = await ask(detected ? "   👤 Usuario" : "   👤 Usuario (Enter si NO requiere login)");
+    const wantsLogin = user.length > 0;
     if (wantsLogin) {
-      user = await ask("   👤 Usuario");
 
       // Si hay un vault previo ilegible (cifrado con otra llave), NO borrar: respaldar y seguir.
       const { isVaultReadable, backupVault } = await import("./secrets/vault.js");
