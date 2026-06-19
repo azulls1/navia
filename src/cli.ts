@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.3");
+  .version("0.24.4");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -389,14 +389,18 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       const wantsAuto = /^(s|y)/i.test(await ask("🔓 ¿Resolver captcha de imagen automático con OCR local (gratis)? (s/N)", "N"));
       if (wantsAuto) {
         captcha = "local";
-        const { ocrAvailable } = await import("./agent/captcha-ocr.js");
+        const { ocrAvailable, installOcr } = await import("./agent/captcha-ocr.js");
         if (await ocrAvailable()) {
-          console.log(pc.green("   ✓ OCR local disponible (ddddocr)."));
+          console.log(pc.green("   ✓ OCR local listo."));
         } else {
-          console.log(
-            pc.yellow("   ⚠️ Falta el OCR local. Instálalo:  npm i ddddocr-node") +
-              pc.dim("  (en una carpeta y corre navia ahí, o global; si no, te pediré el captcha a mano)."),
-          );
+          const yes = /^(s|y)/i.test(await ask("   El OCR local no está instalado. ¿Lo instalo ahora por ti (gratis)? (S/n)", "S"));
+          if (yes) {
+            console.log(pc.dim("   Instalando OCR local… (puede tardar la primera vez)"));
+            const ok = await installOcr();
+            console.log(ok ? pc.green("   ✓ OCR local instalado y listo.") : pc.yellow("   No se pudo instalar; te pediré el captcha a mano."));
+          } else {
+            console.log(pc.dim("   Ok, te pediré el captcha a mano cuando aparezca."));
+          }
         }
       }
     }
@@ -800,6 +804,22 @@ secret
     const bak = await backupVault();
     if (bak) console.log(pc.green(`✓ Vault respaldado en: ${bak}`) + pc.dim("\n  El próximo 'secret set' / wizard creará uno nuevo cifrado."));
     else console.log(pc.dim("No había vault que respaldar; empezarás limpio."));
+  });
+
+// `navia ocr` — instala el OCR local de captcha (para no teclear el nombre del paquete).
+program
+  .command("ocr")
+  .description("Instala el OCR local GRATIS de captcha (en ~/.navia) para usar --captcha local")
+  .action(async () => {
+    const { installOcr, ocrAvailable } = await import("./agent/captcha-ocr.js");
+    if (await ocrAvailable()) {
+      console.log(pc.green("✓ El OCR local ya está disponible."));
+      return;
+    }
+    console.log(pc.cyan("Instalando OCR local de captcha…") + pc.dim(" (puede tardar la primera vez)"));
+    const ok = await installOcr((m) => process.stdout.write(pc.dim(m + "\n")));
+    console.log(ok ? pc.green("\n✓ OCR local instalado. Úsalo con --captcha local (o respóndele 's' al wizard).") : pc.red("\n✗ No se pudo instalar. Revisa tu conexión/npm."));
+    process.exitCode = ok ? 0 : 1;
   });
 
 // `navia init` — escribe ~/.navia/config.json con tus valores por defecto.

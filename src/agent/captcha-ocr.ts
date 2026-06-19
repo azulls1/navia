@@ -12,30 +12,69 @@
  */
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 let _ocr: any = null;
 let _failed = false;
 
+/** Carpeta propia de Navia donde instalamos el OCR (para no ensuciar el CWD del usuario). */
+function naviaHome(): string {
+  return path.join(os.homedir(), ".navia");
+}
+
+/** Intenta resolver+importar un módulo desde la carpeta `base` (createRequire). */
+async function importFrom(base: string, spec: string): Promise<any | null> {
+  try {
+    const req = createRequire(pathToFileURL(path.join(base, "package.json")).href);
+    return await import(pathToFileURL(req.resolve(spec)).href);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Carga `ddddocr-node` de forma robusta: (1) resolución normal; (2) desde el CWD del usuario
- * (clave: si Navia corre vía `npx navia-ai`, vive en la caché de npx y NO ve el `ddddocr-node`
- * que el usuario instaló en su carpeta — aquí lo resolvemos desde process.cwd()).
+ * Carga `ddddocr-node` de forma robusta, buscando en: (1) resolución normal; (2) el CWD del
+ * usuario; (3) ~/.navia (donde lo instala `navia ocr`/el wizard). Clave porque con `npx navia-ai`
+ * Navia vive en la caché de npx y no vería un install hecho en otra ruta.
  */
 async function loadDdddModule(): Promise<any | null> {
   const spec = "ddddocr-node";
   try {
     return await import(spec);
   } catch {
-    /* sigue al fallback por CWD */
+    /* fallbacks */
   }
-  try {
-    const req = createRequire(pathToFileURL(path.join(process.cwd(), "package.json")).href);
-    const resolved = req.resolve(spec);
-    return await import(pathToFileURL(resolved).href);
-  } catch {
-    return null;
-  }
+  return (await importFrom(process.cwd(), spec)) ?? (await importFrom(naviaHome(), spec));
+}
+
+/**
+ * Instala el OCR local (ddddocr-node) en ~/.navia para que el usuario NO tenga que conocer el
+ * nombre del paquete. Devuelve true si quedó disponible. Resetea la caché para reintentar.
+ */
+export function installOcr(onLog?: (m: string) => void): Promise<boolean> {
+  return new Promise((resolve) => {
+    const dir = naviaHome();
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      /* noop */
+    }
+    const child = spawn("npm", ["i", "ddddocr-node", "--prefix", dir, "--no-audit", "--no-fund", "--loglevel", "error"], {
+      stdio: onLog ? ["ignore", "pipe", "pipe"] : "ignore",
+      shell: process.platform === "win32",
+    });
+    child.stdout?.on("data", (d) => onLog?.(d.toString().trim()));
+    child.stderr?.on("data", (d) => onLog?.(d.toString().trim()));
+    child.on("error", () => resolve(false));
+    child.on("close", async (code) => {
+      _failed = false;
+      _ocr = null; // fuerza recarga
+      resolve(code === 0 && (await ocrAvailable()));
+    });
+  });
 }
 
 async function getOcr(): Promise<any | null> {
