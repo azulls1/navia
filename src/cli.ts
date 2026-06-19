@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.24.5");
+  .version("0.24.6");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -448,25 +448,17 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     }
     const browser = (await ask("🖥️  Motor del navegador (chromium|firefox|chrome|patchright)", base.browser ?? "chromium")) as BrowserEngine;
 
-    // Captcha: ofrecer OCR local GRATIS (ddddocr) cuando hay login. Por defecto handoff humano.
-    let captcha: "off" | "local" = base.captcha ?? "off";
+    // Captcha: SIN preguntar (igual que el login). Siempre se intenta con OCR local; si falta el
+    // lector, se instala solo la 1ª vez. Si no se puede, en runtime cae a pedírtelo a mano.
+    const captcha: "off" | "local" = "local";
     if (wantsLogin) {
-      const wantsAuto = /^(s|y)/i.test(await ask("🔓 ¿Resolver captcha de imagen automático con OCR local (gratis)? (s/N)", "N"));
-      if (wantsAuto) {
-        captcha = "local";
-        const { ocrAvailable, installOcr } = await import("./agent/captcha-ocr.js");
-        if (await ocrAvailable()) {
-          console.log(pc.green("   ✓ OCR local listo."));
-        } else {
-          const yes = /^(s|y)/i.test(await ask("   El OCR local no está instalado. ¿Lo instalo ahora por ti (gratis)? (S/n)", "S"));
-          if (yes) {
-            console.log(pc.dim("   Instalando OCR local… (puede tardar la primera vez)"));
-            const ok = await installOcr();
-            console.log(ok ? pc.green("   ✓ OCR local instalado y listo.") : pc.yellow("   No se pudo instalar; te pediré el captcha a mano."));
-          } else {
-            console.log(pc.dim("   Ok, te pediré el captcha a mano cuando aparezca."));
-          }
-        }
+      const { ocrAvailable, installOcr } = await import("./agent/captcha-ocr.js");
+      if (await ocrAvailable()) {
+        console.log(pc.dim("🔓 Captcha: lo resolveré automáticamente con OCR local."));
+      } else {
+        console.log(pc.dim("🔓 Preparando el lector de captcha local (gratis, solo la 1ª vez)…"));
+        const ok = await installOcr();
+        console.log(ok ? pc.green("   ✓ Lector de captcha listo (resolveré los captchas solo).") : pc.yellow("   No se pudo instalar; si aparece un captcha te lo pediré a mano."));
       }
     }
 
