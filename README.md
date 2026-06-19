@@ -1,205 +1,286 @@
+<div align="center">
+
+```
+███╗   ██╗ █████╗ ██╗   ██╗██╗ █████╗
+████╗  ██║██╔══██╗██║   ██║██║██╔══██╗
+██╔██╗ ██║███████║██║   ██║██║███████║
+██║╚██╗██║██╔══██║╚██╗ ██╔╝██║██╔══██║
+██║ ╚████║██║  ██║ ╚████╔╝ ██║██║  ██║
+╚═╝  ╚═══╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═╝
+```
+
 # 🌐 Navia
 
-[![npm](https://img.shields.io/npm/v/navia-ai)](https://www.npmjs.com/package/navia-ai)
+**An AI browser agent that actually logs in.** Give it one sentence — it opens a **real** browser, reads the page, fills forms, **solves text captchas locally for free**, and gets the job done. Just like a person.
+
+[![npm version](https://img.shields.io/npm/v/navia-ai?color=cb3837&logo=npm)](https://www.npmjs.com/package/navia-ai)
+[![downloads](https://img.shields.io/npm/dm/navia-ai?color=cb3837&logo=npm)](https://www.npmjs.com/package/navia-ai)
+[![node](https://img.shields.io/node/v/navia-ai?color=339933&logo=node.js&logoColor=white)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![MCP server](https://img.shields.io/badge/MCP-server-orange)](#-as-an-mcp-server-claude-desktop--code--cursor)
 [![provenance](https://img.shields.io/badge/npm-provenance-blueviolet)](https://docs.npmjs.com/generating-provenance-statements)
-[![MCP](https://img.shields.io/badge/MCP-server-orange)](https://github.com/azulls1/navia#mcp)
-
-> AI-powered autonomous browser agent. Give it a **natural-language instruction** and it opens a **real** browser (Chrome or Firefox), reads the page, clicks, fills forms, extracts data, and operates **any web portal** — just like a person would.
-
-Works with your **Anthropic (Claude) API key** — or with no key at all, using an AI CLI already signed in on your terminal. No per-site scripts: the AI discovers buttons and fields live, following the **navigate → read → act → verify** method.
 
 ```bash
-npx navia-ai "open example.com and tell me what the page is about"
+npm i -g navia-ai   &&   navia
 ```
+
+</div>
+
+<!--
+  📹 DEMO GIF — graba una corrida (p.ej. con ScreenToGif/Peek), súbela a docs/demo.gif
+  y descomenta la línea de abajo. Recomendado: el wizard resolviendo un login con captcha.
+-->
+<!-- <div align="center"><img src="docs/demo.gif" alt="Navia demo" width="760"></div> -->
+
+> [!NOTE]
+> Works **with** your Anthropic (Claude) API key — or **with no key at all**, using the `claude`/`ant` CLI already signed in on your terminal. No per-site scripts: the AI discovers buttons and fields live.
 
 ---
 
-## ✨ What it does
+## 📑 Table of contents
 
-- 🧠 **One instruction, not a script.** You describe the task; Navia decides the steps.
-- 🦊 **Real Chrome or Firefox**, your choice.
-- 🛡️ **Anti-Cloudflare built in.** `--browser chrome` mode connects via **CDP to a real Chrome** → `navigator.webdriver=false` → passes the "Just a moment…" wall. Not evasion: it's your own browser.
-- 👁️ **Reads like a human:** accessibility tree (not pixels) + screenshots for visual verification.
-- 🧩 **Bulk extraction** with JavaScript (lists → JSON), plus a **typed `extract`** primitive (schema-validated output).
-- 🎛️ **Four primitives — the dial:** `agent` (autonomous loop), `observe` (propose actions, no execution), `act` (run one deterministically by ref, no LLM), `extract` (typed data). Script-precise or fully autonomous, your call.
-- ✅ **Self-checking:** optional post-task **validator** (`--validate`) re-checks the live page against your goal and retries once if it wasn't actually done.
-- 🧠 **Per-domain memory (playbooks):** learns reusable tips per site (and from your `wait_for_human` notes) and re-injects them next time — `navia playbook`.
-- 🩹 **Self-healing replay:** deterministic macros that re-locate elements when a site drifts, and re-cache the fixed macro.
-- 📊 **Reliability metrics + `navia eval`:** measures steps, tokens, recoveries, loops; judges runs against a task dataset with an LLM judge.
-- 🔓 **Text-in-image captchas, solved automatically & free** (e.g. CFE's "PCF53"): a local OCR model (ddddocr) reads the captcha **on your machine** — no paid service, no API, not the LLM. On by default (`--captcha local`); installed for you on first use. Interactive captchas (reCAPTCHA grid, hCaptcha, sliders) and 2FA are handed to you.
-- 🪄 **Zero setup, nothing to remember.** The wizard **auto-detects if the page needs login** (no "does it require login?" question), **auto-downloads the browser** the first time, and **auto-installs the captcha reader** — you just answer URL, user/password and the task. Press **ESC** to quit anytime.
-- 💬 **Conversation mode:** keeps the browser & session open and takes follow-up commands — log in once, keep going.
-- ⚙️ **Persistent config** (`navia init`) + project **scaffolding** (`navia create`).
-- 🔐 **Secure by design:** credential vault (passwords/2FA used but never seen by the model), **encrypted by default**, **domain-bound** (a secret only fills on its allowed origin — anti-phishing); prompt-injection **spotlighting**, `evaluate` gating (`--no-eval`) and a network **allow-list** (`--allow-domain`). Asks for confirmation before irreversible actions; verifies the login actually succeeded.
-- 📦 **CLI + library** (TypeScript, ESM) **+ MCP server** (with secure credential **elicitation**).
+- [Why Navia](#-why-navia)
+- [Quick start](#-quick-start)
+- [How it works](#-how-it-works)
+- [The login + captcha flow](#-the-login--captcha-flow)
+- [CLI usage](#-cli-usage)
+- [Credentials, 2FA & sessions](#-credentials-2fa--sessions)
+- [Per-domain memory](#-per-domain-memory-playbooks)
+- [No API key (terminal AI)](#-no-api-key--use-your-terminals-ai-cli)
+- [Deterministic macros](#-deterministic-macros-record--replay-no-ai)
+- [Structured extraction](#-structured-extraction-web--typed-json)
+- [Library usage](#-library-usage)
+- [MCP server](#-as-an-mcp-server-claude-desktop--code--cursor)
+- [Engines](#-browser-engines)
+- [Responsible use](#-responsible-use)
 
-## 📦 Installation
+---
+
+## ✨ Why Navia
+
+| | |
+|---|---|
+| 🧠 **One instruction, not a script** | You describe the task; Navia decides the steps. |
+| 🔓 **Text captchas solved automatically & free** | A local OCR model (ddddocr) reads "PCF53"-style captchas **on your machine** — no paid service, no API, not the LLM. On by default; installed for you on first use. |
+| 🪄 **Zero setup, nothing to remember** | Auto-detects if a page needs login (no yes/no prompt), **auto-downloads the browser**, **auto-installs the captcha reader**. You just answer the task. |
+| ✅ **Verifies the login really worked** | Confirms by URL + session links, not by "the form disappeared" — no false "logged in". |
+| 🔐 **Secrets the model never sees** | Encrypted vault for passwords/2FA, **domain-bound** (anti-phishing). The value is injected locally, outside the prompt. |
+| 🛡️ **Anti-Cloudflare built in** | `--browser chrome` connects via CDP to your real Chrome → `navigator.webdriver=false`. Not evasion — it's your own browser. |
+| 👁️ **Reads like a human** | Accessibility tree (not pixels), traverses shadow DOM + cross-origin iframes, stable versioned refs. |
+| 🎛️ **Four primitives — a dial** | `agent` (autonomous), `observe` (propose), `act` (run one, no LLM), `extract` (typed JSON). |
+| 💬 **Conversation mode** | Keeps the browser + session open and takes follow-up commands — log in once, keep going. |
+| 📦 **CLI + library + MCP server** | TypeScript/ESM. Use it from the terminal, your code, or inside Claude Desktop/Code/Cursor. |
+
+---
+
+## 🚀 Quick start
 
 ```bash
-npm install -g navia-ai      # global, then just run `navia`
-# or without installing:
-npx navia-ai
+npm i -g navia-ai     # install once → use the `navia` command
+navia                 # launches the guided wizard
 ```
 
-That's it. On the first run Navia **downloads the browser by itself** if it's missing (no manual `playwright install` needed) and installs the local captcha reader on demand.
-
-Optional — set an API key for **faster** runs (vision + prompt caching). Without it, Navia uses the `claude`/`ant` CLI already signed in on your terminal:
+On the **first run** Navia downloads the browser by itself if missing (no manual `playwright install`) and installs the local captcha reader on demand. Optionally, set an API key for **faster** runs (vision + prompt caching); without it, Navia uses the `claude`/`ant` CLI on your terminal:
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+<details>
+<summary><b>One-liner without installing</b></summary>
+
+```bash
+npx navia-ai "open example.com and tell me what the page is about"
+```
+</details>
+
 Run `navia doctor` anytime to check your environment.
 
-## 🚀 Usage (CLI)
+---
 
-```bash
-# Interactive mode (welcome + guided questions): just run `navia` with no task, or:
-navia start
-# Guided flow: AI engine (auto-detected: API key, or your `claude`/`ant` CLI; asks for a key
-# only if none) → start URL → it AUTO-DETECTS if the page has login (no yes/no question) and
-# asks for user + hidden password (→ encrypted vault) → task → browser → journal location.
-# Captcha is handled automatically (local OCR, installed on first use). Browser auto-downloads
-# if missing. It's CONVERSATIONAL: after each task it keeps the browser + session open and asks
-# "what now?". Press ESC to quit. If run inside another agent (no real terminal) it won't hang —
-# it points you to MCP mode.
+## 🔧 How it works
 
-# Default browser (Chromium)
-navia "search 't-shirts' on example-shop.com and list the first 5 products with prices"
-
-# Conversation mode for a one-off task too (stays open, asks for the next):
-navia run "explore this site and map its sections" --browser firefox --chat
-
-# Firefox
-navia run "go to my-portal.com, sign in, and download my latest invoice" --browser firefox
-
-# Real Chrome (Cloudflare-protected sites)
-navia chrome                                   # 1) launch Chrome with debugging
-navia run "search QA jobs on {portal}" --browser chrome   # 2) the task
-
-# Other options
-navia "..." --headless           # no visible window
-navia "..." --slow-mo 300        # go slow (anti rate-limit)
-navia "..." --start-url https://...   # open a URL before starting
-navia "..." --model claude-opus-4-8   # another model
-navia "..." --workspace          # per-task log/brain folder — asks where to save (new folder, detected Obsidian vault, or custom path)
-navia "..." --validate           # after finishing, an LLM judge re-checks the live page vs the goal and retries once if needed
-navia "..." --captcha off         # disable the local captcha OCR (default is `local`); image captchas go to you
-navia "..." --no-eval            # disable the `evaluate` JS tool (recommended on untrusted sites)
-navia "..." --allow-domain example.com   # network allow-list (repeatable): abort requests to other domains (anti-exfiltration)
+```mermaid
+flowchart LR
+    U([Your instruction]) --> A
+    subgraph Loop["BrowserAgent · tool-use loop"]
+      A["🧠 Claude / CLI"] -->|"navigate, click, type, fill_credential…"| D[BrowserDriver]
+      D -->|"accessibility snapshot + change-observation"| A
+    end
+    D --> E{Engine}
+    E -->|CDP| C[Real Chrome 🔑]
+    E --> CH[Chromium]
+    E --> FF[Firefox]
+    E --> PR[patchright 🥷]
+    C & CH & FF & PR --> W([🌐 The website])
 ```
 
-### Set your defaults once (`navia init`) and scaffold a project (`navia create`)
-```bash
-navia init                       # interactive: saves model/engine/profile/provider to ~/.navia/config.json
-navia init --browser chrome --provider api   # or non-interactive
-navia create my-bot              # scaffolds a project: navia.config.json, .env.example, tasks.txt, run.mjs
+1. **snapshot** = accessibility tree, one `ref` per element (the AI acts by `ref`).
+   - **Chromium/Chrome:** built with **CDP** (`Accessibility.getFullAXTree`) — doesn't mutate the DOM, traverses **shadow DOM** and **iframes** (cross-origin/OOPIF like Turnstile via a dedicated CDP session), `ref`s are **stable** (`backendNodeId`).
+   - **Firefox:** JS-injection snapshot as fallback.
+   - `ref`s are **versioned** (`v<N>:id`): using a stale ref from an old snapshot is rejected instead of hitting the wrong node.
+2. **evaluate** runs JS for bulk extraction or stubborn clicks (gate it off with `--no-eval`). **batch_actions** runs several actions in one tool call.
+3. **detectChallenge** recognizes anti-bot walls (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome).
+4. The **system prompt** treats all page content as untrusted **data, never instructions** (prompt-injection spotlighting).
+
+---
+
+## 🔓 The login + captcha flow
+
+This is what makes Navia *actually* log in — fully automatic, deterministic, no loops:
+
+```mermaid
+flowchart TD
+    S([Login page]) --> U[Type username]
+    U --> P["fill_credential password — never seen by the model"]
+    P --> SUB{About to submit?}
+    SUB -->|"captcha empty"| OCR["🔓 Local OCR reads the captcha<br/>ddddocr · free · on your machine"]
+    OCR --> CL["Click 'Sign in' — same step"]
+    SUB -->|"no captcha"| CL
+    CL --> V{assessLoginOutcome}
+    V -->|"private URL + logout link + no error"| OK([✅ Logged in])
+    V -->|"still on login / error"| RETRY["Re-type & retry · max 2-3 · then stop honestly"]
+    RETRY --> SUB
+    OCR -.->|"cannot read / disabled"| HUMAN["🙋 Hand the window to you"]
 ```
-Precedence: CLI flag > env var > `~/.navia/config.json` > built-in default.
 
-During a run:
-- If **login / captcha / 2FA** is needed, Navia pauses and hands you the window.
-- Before anything **irreversible**, it asks for confirmation (`y/N`). Use `--yes` to auto-approve (test environments only).
+- **Text captchas** → solved automatically by **local OCR** before submitting (default `--captcha local`).
+- **Empty captcha** → submit is **blocked** (no blind sends, no infinite loops; hard retry cap).
+- **Interactive captchas** (reCAPTCHA grid, hCaptcha, sliders) & **2FA** → handed to **you**.
+- **Success is verified** — Navia won't claim "logged in" unless it really is.
 
-### Sessions / profiles (don't log in every time)
+> The LLM is never asked to "solve" a captcha (Claude declines that by policy). The OCR is a **separate, dedicated, local** tool — for **your own authorized accounts**.
+
+---
+
+## 🖥️ CLI usage
+
 ```bash
-# 1) Sign in once and save the profile (cookies/storage)
-navia login my-portal --browser chromium --start-url https://my-portal.com/login
+# Guided wizard (recommended): just run navia
+navia
+#  → asks the start URL, auto-detects login, asks user + hidden password,
+#    the task, the browser, and where to save the journal. Captcha is automatic.
+#    Conversational: keeps the session open and asks "what now?". Press ESC to quit.
 
-# 2) Reuse that session: start already authenticated, skip login/captcha
-navia run "download my latest invoice" --profile my-portal
+# Direct task
+navia "search 't-shirts' on example-shop.com and list the first 5 with prices"
+
+# Conversation mode for a one-off too (stays open, asks for the next)
+navia run "explore this site and map its sections" --chat
+
+# Cloudflare-walled sites → real Chrome via CDP
+navia chrome                                          # 1) launch Chrome with debugging
+navia run "search jobs on {portal}" --browser chrome  # 2) the task
 ```
-- Profiles are saved in `~/.navia/profiles/` (covered by `.gitignore`).
-- **Always encrypted (AES-256-GCM).** By default Navia auto-generates a key at `~/.navia/key` — zero setup. Set **`NAVIA_SECRET`** to use your own passphrase instead (stronger: the key never touches disk; ideal for shared machines).
 
-### Credentials and 2FA without exposing them to the AI
-Store passwords / 2FA in an encrypted vault; the AI **uses** them by key but **never sees the value**:
+<details>
+<summary><b>All the useful flags</b></summary>
+
 ```bash
-navia secret set shop.password                       # prompts for the password without showing it
-navia secret set shop.password --origin https://accounts.example.com   # bind it: only fills on this origin (anti-phishing)
-navia secret totp shop.2fa         # prompts for the TOTP secret (base32 from your authenticator)
-navia secret list                  # lists keys (no values)
-navia secret reset                 # start fresh — backs up the current vault to .bak (never deletes)
+navia "..." --browser firefox|chrome|patchright   # engine (default chromium)
+navia "..." --headless                            # no visible window
+navia "..." --slow-mo 300                         # go slow (anti rate-limit)
+navia "..." --start-url https://...               # open a URL before starting
+navia "..." --model claude-opus-4-8               # another model
+navia "..." --workspace                           # per-task log/brain folder (asks where)
+navia "..." --validate                            # an LLM judge re-checks the result and retries once
+navia "..." --captcha off                         # disable local captcha OCR (default: local)
+navia "..." --no-eval                             # disable the evaluate JS tool (untrusted sites)
+navia "..." --allow-domain example.com            # network allow-list (repeatable, anti-exfiltration)
+navia "..." --yes                                 # auto-approve irreversible actions (TEST ONLY)
 ```
-Then, in a task, the AI uses `fill_credential(ref, "shop.password")` and `fill_totp(ref, "shop.2fa")` — the real value is injected locally, outside the prompt. The vault is **encrypted by default** (auto-managed key, or your `NAVIA_SECRET`).
+</details>
 
-**Domain binding (anti-phishing):** if you set `--origin`, the secret is filled **only** when the element's real frame origin matches — typing your password into an unexpected/cross-origin frame is hard-rejected. Tip: the interactive `navia start` wizard asks for the password and stores it for you — no manual setup.
+### Set your defaults once · scaffold a project
+
+```bash
+navia init                     # save model/engine/profile/provider to ~/.navia/config.json
+navia create my-bot            # scaffold: navia.config.json, .env.example, tasks.txt, run.mjs
+```
+Precedence: **CLI flag > env var > `~/.navia/config.json` > built-in default.**
+
+---
+
+## 🔐 Credentials, 2FA & sessions
+
+Store passwords / 2FA in an **encrypted vault**; the AI **uses** them by key but **never sees the value**:
+
+```bash
+navia secret set shop.password                                   # prompts, hidden
+navia secret set shop.password --origin https://accounts.x.com   # bind it: only fills on this origin
+navia secret totp shop.2fa                                       # TOTP base32 from your authenticator
+navia secret list                                                # keys only, no values
+```
+
+In a task the AI uses `fill_credential(ref, "shop.password")` / `fill_totp(ref, "shop.2fa")` — the real value is injected locally, **outside the prompt**.
+
+- 🔒 **Encrypted by default** (AES-256-GCM, auto-key at `~/.navia/key`). Set **`NAVIA_SECRET`** for your own passphrase (key never touches disk).
+- 🎯 **Domain binding (anti-phishing):** with `--origin`, the secret fills **only** when the element's real frame origin matches — typing your password into an unexpected/cross-origin frame is hard-rejected.
+
+<details>
+<summary><b>Sessions / profiles — don't log in every time</b></summary>
+
+```bash
+navia login my-portal --start-url https://my-portal.com/login   # sign in once, save the profile
+navia run "download my latest invoice" --profile my-portal      # reuse it, already authenticated
+```
+Profiles live in `~/.navia/profiles/` (gitignored), encrypted.
+</details>
+
+---
 
 ## 🧠 Per-domain memory (playbooks)
 
-Navia learns reusable "operating tips" per site and re-injects them the next time it visits that domain — so it stops rediscovering each site from scratch.
+Navia learns reusable "operating tips" per site and re-injects them next time it visits — so it stops rediscovering each site from scratch.
 
 ```bash
 navia playbook add example.com --note "the 'Sign in' button enables only after re-typing the email"
 navia playbook show example.com
 navia playbook list
 ```
-Tips are also captured automatically: whatever you type when Navia calls `wait_for_human` is saved as a tip for the current domain. Disable everything with `--no-memory`. Stored in `~/.navia/playbooks/`.
+Tips are also captured automatically from your `wait_for_human` notes. Disable with `--no-memory`. Stored in `~/.navia/playbooks/`.
 
-## 📊 Reliability & evals (`navia eval`)
-
-Every run reports **metrics beyond pass/fail** (steps, tokens, error recoveries, repeated-action loops). To benchmark Navia on a set of live-site tasks with an LLM judge (WebJudge-style):
-
-```bash
-navia eval --dataset ./tasks.jsonl --report ./report.json
-# tasks.jsonl: one {"task_id","task","url","level"} per line (Online-Mind2Web-ish)
-```
-Reports success rate (overall and by difficulty) plus aggregate metrics. Ships with a small sample dataset if you omit `--dataset`.
-
-## 🔌 As an MCP server (Claude Desktop / Code / Cursor)
-
-Navia also exposes itself as an **MCP server**: its browser tools become available inside your client, where the client's model drives them (CDP snapshot, stable refs, captcha detection, profiles, and vault all included).
-
-**Claude Code:**
-```bash
-claude mcp add navia -- npx -y navia-ai mcp --browser chromium
-```
-
-**Claude Desktop / Cursor** (JSON config):
-```json
-{
-  "mcpServers": {
-    "navia": { "command": "npx", "args": ["-y", "navia-ai", "mcp", "--browser", "chromium"] }
-  }
-}
-```
-Accepts `--profile <name>` (start authenticated) and `--browser chrome|firefox`. Tools that need a TTY (`confirm_action`/`wait_for_human`) are not exposed: in MCP the human approves inside their own client.
-
-**Secure credential elicitation:** if a task needs a vault secret that isn't stored yet, the MCP server **asks you for it through your client's secure prompt** (MCP elicitation) and saves it encrypted — the value never passes through the model. Discoverable via the MCP registry (`server.json`).
+---
 
 ## 🔑 No API key — use your terminal's AI CLI
 
-Navia can "think" with an AI CLI **already authenticated** in your terminal, without an `ANTHROPIC_API_KEY`:
+Navia can "think" with an AI CLI **already authenticated** on your terminal, with no `ANTHROPIC_API_KEY`:
 
 ```bash
-navia run "..." --provider claude-cli                      # uses `claude` (Claude Code)
-navia run "..." --provider claude-cli --cli-command ant    # recommended: Anthropic CLI
+navia run "..." --provider claude-cli                    # uses `claude` (Claude Code)
+navia run "..." --provider claude-cli --cli-command ant  # recommended: Anthropic CLI
 ```
-- In **`auto`** (default), Navia uses `ANTHROPIC_API_KEY` if present; otherwise it falls back to the `claude` CLI.
-- **`ant`** (Anthropic CLI) is recommended: `ant auth login` once → it's a clean single-shot completion endpoint over your login, ideal for the loop. `claude` works as a *fallback* but is slower (it's an agent, not a completion endpoint).
-- **Any other terminal AI:** set `NAVIA_CLI_CMD="my-cli --flags"` (its stdout is taken as the response).
+- **`auto`** (default): API key if present; otherwise the `claude` CLI.
+- **`ant`** recommended: `ant auth login` once → clean single-shot completion over your login. `claude` works as a slower fallback.
+- Any other terminal AI: `NAVIA_CLI_CMD="my-cli --flags"`.
 
-> Note: CLI mode spawns one process per step → slower than `--provider api`, but needs no key.
+> CLI mode spawns one process per step → slower than `--provider api`, but needs no key. With the `claude`/`ant` CLI, Navia can also pass the captcha image to it for tasks that need vision.
 
-## 🔁 Deterministic macros (record and replay, no AI)
+---
 
-Record a run and replay it as many times as you want **with no LLM and no API key** (fast and free). Replay uses **stable locators** (role + name), not ephemeral refs:
+## 🔁 Deterministic macros (record & replay, no AI)
+
+Record once, replay forever **with no LLM and no API key** — fast and free. Replay uses **stable locators** (role + name) and **self-heals** if the site drifts:
 
 ```bash
-navia "sign in and download this month's invoice" --record ./invoice.jsonl   # record
-navia replay ./invoice.jsonl --profile my-portal                              # replay, no AI
+navia "sign in and download this month's invoice" --record ./invoice.jsonl
+navia replay ./invoice.jsonl --profile my-portal
 ```
-Ideal for validated, repetitive flows. Secrets aren't stored in the macro: `fill_credential`/`fill_totp` are re-injected fresh from the vault on each replay.
+Secrets aren't stored in the macro: `fill_credential`/`fill_totp` are re-injected fresh from the vault each replay.
+
+---
 
 ## 🧱 Structured extraction (web → typed JSON)
 
-Extract structured, schema-validated data from a page. Navia forces the model to answer through a tool whose schema **is** your schema, so the result always matches (with a retry otherwise). Requires an API key.
+Get schema-validated data: Navia forces the model to answer through a tool whose schema **is** your schema (with retry). Requires an API key.
 
 ```bash
-# schema.json describes the shape you want
-navia extract "the first 5 products with name and price" \
-  --url https://example-shop.com --schema ./schema.json
+navia extract "the first 5 products with name and price" --url https://example-shop.com --schema ./schema.json
 ```
+
+<details>
+<summary><b>Library example</b></summary>
 
 ```ts
 import { extract } from "navia-ai";
@@ -210,17 +291,26 @@ const data = await extract({
   schema: {
     type: "object",
     properties: {
-      items: {
-        type: "array",
-        items: { type: "object", properties: { title: { type: "string" }, points: { type: "number" } }, required: ["title"] },
-      },
+      items: { type: "array", items: { type: "object",
+        properties: { title: { type: "string" }, points: { type: "number" } }, required: ["title"] } },
     },
     required: ["items"],
   },
 });
 ```
+</details>
 
-## 🧑‍💻 Usage (library)
+### 📊 Reliability & evals
+
+Every run reports metrics beyond pass/fail (steps, tokens, recoveries, repeated-action loops). Benchmark on live-site tasks with an LLM judge:
+
+```bash
+navia eval --dataset ./tasks.jsonl --report ./report.json   # Online-Mind2Web-ish; ships a sample set
+```
+
+---
+
+## 🧑‍💻 Library usage
 
 ```ts
 import { runNavia } from "navia-ai";
@@ -228,19 +318,17 @@ import { runNavia } from "navia-ai";
 const { summary, steps, metrics } = await runNavia({
   task: "Open example.com and extract all the main-menu links",
   browser: "chromium",
-  validate: true,            // optional post-task validator
-  hooks: {
-    log: (m) => console.log(m),
-    confirmAction: async (desc) => /* your logic */ true,
-    waitForHuman: async (reason) => { /* resolve, then */ return ""; },
-  },
+  validate: true,
+  hooks: { log: (m) => console.log(m) },
 });
 
-console.log(summary, metrics); // metrics: steps, toolCalls, toolErrors, tokensIn/Out, recoveries, loopHits
+console.log(summary, metrics); // steps, toolCalls, toolErrors, tokensIn/Out, recoveries, loopHits
 ```
 
-### Primitives: `observe` / `act` (the dial)
-For deterministic control: see candidate actions without running them, then run exactly one — by `ref`, with **no extra LLM call**.
+<details>
+<summary><b>Primitives: <code>observe</code> / <code>act</code> (the dial)</b></summary>
+
+See candidate actions without running them, then run exactly one — by `ref`, with **no extra LLM call**.
 
 ```ts
 import { BrowserDriver, observe, act } from "navia-ai";
@@ -249,47 +337,52 @@ const driver = await BrowserDriver.create({ engine: "chromium" });
 await driver.navigate("https://example.com");
 
 const actions = await observe({ instruction: "the 'More information' link", driver });
-await act(actions[0], { driver });        // deterministic, no LLM
+await act(actions[0], { driver });          // deterministic, no LLM
 // or one-shot:  await act("click 'More information'", { driver });
 ```
+</details>
 
-## 🔧 How it works (architecture)
+---
 
+## 🔌 As an MCP server (Claude Desktop / Code / Cursor)
+
+Navia exposes its browser tools as an **MCP server** — the client's model drives them (CDP snapshot, stable refs, captcha detection, profiles, vault).
+
+**Claude Code:**
+```bash
+claude mcp add navia -- npx -y navia-ai mcp --browser chromium
 ```
-Your instruction ─► BrowserAgent (tool-use loop with Claude)
-                      │  navigate · snapshot · click · type · fill_form · batch_actions · evaluate · wait_for · screenshot
-                      ▼
-                 BrowserDriver (Playwright)
-                      ▼
-        Real Chrome (CDP)  /  Firefox  /  Chromium  ─►  the website
+
+**Claude Desktop / Cursor** (JSON):
+```json
+{ "mcpServers": { "navia": { "command": "npx", "args": ["-y", "navia-ai", "mcp", "--browser", "chromium"] } } }
 ```
 
-1. **snapshot** = accessibility tree with a `ref` per element (the AI acts by `ref`).
-   - On **Chromium/Chrome** the snapshot is built with **CDP** (`Accessibility.getFullAXTree`): it doesn't mutate the DOM, traverses **shadow DOM** and **iframes** (same-process via `frameId`; cross-origin/OOPIF like Turnstile via a dedicated CDP session, with composite refs `fN_id`), and `ref`s are **stable** (`backendNodeId`). Actions are resolved over CDP.
-   - On **Firefox** (which doesn't speak CDP) a JS-injection snapshot is used as a *fallback*; there `ref`s are ephemeral → re-snapshot after DOM changes.
-   - `ref`s are **versioned** (`v<N>:id`): acting on a stale ref from an old snapshot is rejected with a clear message instead of hitting the wrong node.
-2. **evaluate** runs JS to extract lists or resolve stubborn clicks (gate it off with `--no-eval` on untrusted sites). **batch_actions** runs several independent actions in one tool call.
-3. **detectChallenge** recognizes walls (Cloudflare/Turnstile/hCaptcha/reCAPTCHA/DataDome) and hands the window to the human.
-4. The **system prompt** carries the production-proven method, distilled — and treats all page content as untrusted **data, never instructions** (prompt-injection spotlighting); page text is wrapped/flagged so embedded "ignore your instructions…" attacks don't steer the agent.
+🔐 **Secure credential elicitation:** if a task needs a vault secret that isn't stored, the server **asks you through your client's secure prompt** (MCP elicitation) and saves it encrypted — never through the model.
+
+---
+
+## 🧭 Browser engines
 
 | Engine | When to use it |
 |---|---|
-| `chromium` (default) | Most sites. |
+| `chromium` *(default)* | Most sites. |
 | `firefox` | Alternative; some portals behave better. |
 | `chrome` (CDP) | 🔑 **Cloudflare**-walled sites. Launches your real Chrome and connects via CDP. |
-| `patchright` | 🥷 Anti-detection without pre-opening Chrome. Patched Playwright (removes the `Runtime.enable` leak). Opt-in: `npm i patchright && npx patchright install chromium`. |
+| `patchright` | 🥷 Anti-detection without pre-opening Chrome (removes the `Runtime.enable` leak). Opt-in: `npm i patchright`. |
+
+---
 
 ## ⚠️ Responsible use
 
-Navia drives a real browser with your credentials and your session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP trick **does not forcibly bypass** protections — it uses your real browser. It bundles **no third-party captcha-solving services**.
+Navia drives a real browser with **your** credentials and session. Use it only on sites and accounts **you own or are authorized to access**, respecting their Terms of Service. The CDP mode **does not forcibly bypass** protections — it uses your real browser. Navia bundles **no third-party (paid) captcha-solving services**; the local OCR is a dedicated tool for **your own** authorized login, and interactive/behavioral captchas + 2FA are always handed to you.
 
-**Captchas — reliable by design.** Navia **detects** the captcha field, fills it (or hands it to you), **never submits with an empty captcha** (no blind submits, no infinite loops — there's a hard retry cap), and **verifies the login actually succeeded** afterwards (no false "logged in").
+---
 
-- **Text-in-image captchas (default, `--captcha local`):** a **free, local, open-source OCR** model dedicated to text captchas (**ddddocr**) reads the image **on your machine** and fills it automatically, right before submitting — no paid service, no API, **not the LLM**. It's installed for you on first use. Verified reading real text captchas (e.g. CFE). For **your own authorized accounts**. With `--captcha off`, or if the OCR can't read it, Navia hands you the window instead.
-- **Interactive / behavioral captchas** (reCAPTCHA grid, hCaptcha, sliders, FunCaptcha) and **2FA** are always handed to you — Navia does not auto-solve those. The LLM itself is never asked to "solve" a captcha (Claude declines that by policy); the OCR is a separate dedicated tool, run only with your explicit opt-in for your own account.
+<div align="center">
 
-Navia bundles **no third-party (paid) captcha-solving services**.
+**[npm](https://www.npmjs.com/package/navia-ai)** · **[Issues](https://github.com/azulls1/navia/issues)** · MIT License
 
-## 📄 License
+Made with ❤️ for people who are tired of doing the same login every day.
 
-MIT
+</div>
