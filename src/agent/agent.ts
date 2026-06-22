@@ -11,8 +11,10 @@ import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
 import { OpenAICompatClient, resolveOpenAIPreset } from "../providers/openai-provider.js";
 import { DEFAULT_MAX_STEPS, resolveModel } from "../config.js";
-import { withDefaultHooks, resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory } from "./loop-common.js";
+import { withDefaultHooks, resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory, LoopMetrics, type NaviaMetrics } from "./loop-common.js";
 import { createAnthropic } from "../providers/anthropic-client.js";
+
+export type { NaviaMetrics }; // re-exportado (definido en loop-common) para la API pública
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -67,18 +69,6 @@ export interface NaviaOptions {
 }
 
 /** Métricas de fiabilidad/coste de una corrida (más allá de éxito binario). */
-export interface NaviaMetrics {
-  steps: number;
-  toolCalls: number;
-  toolErrors: number;
-  /** Tokens de entrada (incluye cache read/creation) y de salida (solo provider API). */
-  tokensIn: number;
-  tokensOut: number;
-  /** Acciones exitosas que siguieron a un error (recuperación). */
-  recoveries: number;
-  /** Llamadas idénticas consecutivas (señal de bucle/atasco). */
-  loopHits: number;
-}
 
 export interface NaviaResult {
   /** Resumen final en texto que devuelve la IA. */
@@ -296,9 +286,7 @@ export class BrowserAgent {
       ];
 
       let totalSteps = 0;
-      const metrics: NaviaMetrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
-      let lastWasError = false;
-      let lastSig = "";
+      const metrics = new LoopMetrics();
       let loginContext = false; // se activa al usar fill_credential/fill_totp → verificamos el login
       let loginVerifyFails = 0; // tope de re-inyecciones por login no confirmado (anti-bucle)
       // Bucle de CONVERSACIÓN: cada iteración resuelve una tarea; si hay hook nextTask, al
@@ -321,8 +309,7 @@ export class BrowserAgent {
           });
 
           const u = response.usage as any;
-          metrics.tokensIn += (u?.input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0);
-          metrics.tokensOut += u?.output_tokens ?? 0;
+          metrics.addTokens((u?.input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0), u?.output_tokens ?? 0);
           messages.push({ role: "assistant", content: response.content });
 
           const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
@@ -381,15 +368,11 @@ export class BrowserAgent {
           for (const tu of toolUses) {
             const refForLoc = (tu.input as any)?.ref;
             const locator = typeof refForLoc === "string" ? driver.describeRef(refForLoc) : null;
-            metrics.toolCalls++;
+            metrics.recordCall(tu.name, tu.input);
             if (tu.name === "fill_credential" || tu.name === "fill_totp") loginContext = true;
-            const sig = `${tu.name}:${JSON.stringify(tu.input)}`;
-            if (sig === lastSig) metrics.loopHits++;
-            lastSig = sig;
             try {
               const out = await dispatchTool(tu.name, tu.input as Record<string, any>, driver, this.hooks, policy);
-              if (lastWasError) metrics.recoveries++;
-              lastWasError = false;
+              metrics.recordSuccess();
               const content: Anthropic.ToolResultBlockParam["content"] = [];
               if (out.text) content.push({ type: "text", text: out.text });
               if (out.imageBase64)
@@ -412,8 +395,7 @@ export class BrowserAgent {
                 content: [{ type: "text", text: `Error: ${(err as Error).message}` }],
                 is_error: true,
               });
-              metrics.toolErrors++;
-              lastWasError = true;
+              metrics.recordError();
               this.hooks.log?.(`✗ ${tu.name}: ${(err as Error).message}`);
               await recorder.log({ step: totalSteps, type: "action", tool: tu.name, input: tu.input, locator: locator ?? undefined, ok: false, error: (err as Error).message });
             }

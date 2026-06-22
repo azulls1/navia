@@ -15,7 +15,7 @@ import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
 import { DEFAULT_MAX_STEPS } from "../config.js";
-import { resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory } from "./loop-common.js";
+import { resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory, LoopMetrics } from "./loop-common.js";
 
 function extractJson(s: string): any | null {
   if (!s) return null;
@@ -143,9 +143,7 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     await recorder.log({ type: "start", task: opts.task, engine, provider: "claude-cli" });
 
     let totalSteps = 0;
-    const metrics = { steps: 0, toolCalls: 0, toolErrors: 0, tokensIn: 0, tokensOut: 0, recoveries: 0, loopHits: 0 };
-    let lastWasError = false;
-    let lastSig = "";
+    const metrics = new LoopMetrics();
     let loginContext = false;
     let loginVerifyFails = 0;
     // Imágenes (p.ej. captcha) capturadas que se adjuntan al SIGUIENTE prompt del CLI para que las lea.
@@ -223,15 +221,11 @@ o, si la tarea ya está completa o no puedes continuar:
 
         hooks.log?.(`💭 ${action.thought ?? ""} → ${action.tool} ${JSON.stringify(action.args ?? {})}`);
         const locator = typeof action.args?.ref === "string" ? driver.describeRef(action.args.ref) : null;
-        metrics.toolCalls++;
+        metrics.recordCall(action.tool, action.args ?? {});
         if (action.tool === "fill_credential" || action.tool === "fill_totp") loginContext = true;
-        const sig = `${action.tool}:${JSON.stringify(action.args ?? {})}`;
-        if (sig === lastSig) metrics.loopHits++;
-        lastSig = sig;
         try {
           const out = await dispatchTool(action.tool, action.args ?? {}, driver, hooks, policy);
-          if (lastWasError) metrics.recoveries++;
-          lastWasError = false;
+          metrics.recordSuccess();
           let obs: string;
           if (out.imageBase64) {
             // Guarda la captura en un PNG y la deja pendiente: el CLI la LEERÁ en el próximo turno.
@@ -252,8 +246,7 @@ o, si la tarea ya está completa o no puedes continuar:
           transcript.push(`OBSERVACIÓN: ${truncate(obs, 4000)}`);
           await recorder.log({ step: totalSteps, type: "action", thought: action.thought, tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: true, result: preview(obs) });
         } catch (e) {
-          metrics.toolErrors++;
-          lastWasError = true;
+          metrics.recordError();
           hooks.log?.(`✗ ${action.tool}: ${(e as Error).message}`);
           transcript.push(`ERROR en ${action.tool}: ${(e as Error).message}`);
           await recorder.log({ step: totalSteps, type: "action", tool: action.tool, input: action.args ?? {}, locator: locator ?? undefined, ok: false, error: (e as Error).message });

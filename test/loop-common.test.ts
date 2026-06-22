@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { withDefaultHooks, NEXT_TASK_PREFIX, resolveProfileState } from "../src/agent/loop-common.js";
+import { withDefaultHooks, NEXT_TASK_PREFIX, resolveProfileState, LoopMetrics } from "../src/agent/loop-common.js";
 import { createAnthropic } from "../src/providers/anthropic-client.js";
 
 describe("loop-common · helpers compartidos", () => {
@@ -25,6 +25,39 @@ describe("loop-common · helpers compartidos", () => {
     expect(chrome.loaded).toBe(true);
     expect(chrome.userDataDir).toMatch(/chrome-miperfil$/);
     expect(chrome.storageState).toBeUndefined();
+  });
+});
+
+describe("loop-common · LoopMetrics", () => {
+  it("cuenta llamadas y detecta bucle (firma repetida)", () => {
+    const m = new LoopMetrics();
+    m.recordCall("click", { ref: "v1:7" });
+    m.recordCall("click", { ref: "v1:7" }); // idéntica → loopHit
+    m.recordCall("type", { ref: "v1:8", text: "x" });
+    expect(m.toolCalls).toBe(3);
+    expect(m.loopHits).toBe(1);
+  });
+
+  it("cuenta errores y recuperaciones (éxito tras error)", () => {
+    const m = new LoopMetrics();
+    m.recordCall("click", {});
+    m.recordError(); // falló
+    m.recordCall("snapshot", {});
+    m.recordSuccess(); // éxito tras error → recovery
+    m.recordCall("snapshot", {});
+    m.recordSuccess(); // éxito tras éxito → NO recovery
+    expect(m.toolErrors).toBe(1);
+    expect(m.recoveries).toBe(1);
+  });
+
+  it("acumula tokens y es asignable como NaviaMetrics", () => {
+    const m = new LoopMetrics();
+    m.addTokens(100, 20);
+    m.addTokens(50, 10);
+    m.steps = 5;
+    expect(m.tokensIn).toBe(150);
+    expect(m.tokensOut).toBe(30);
+    expect(JSON.parse(JSON.stringify(m))).toMatchObject({ steps: 5, tokensIn: 150, tokensOut: 30 }); // serializa limpio (sin métodos)
   });
 });
 

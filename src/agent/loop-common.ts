@@ -16,6 +16,58 @@ import { tipsBlockFor } from "./domain-memory.js";
 /** Prefijo del mensaje al encadenar una nueva tarea en la misma sesión (modo chat/conversacional). */
 export const NEXT_TASK_PREFIX = "Nueva tarea (misma sesión del navegador):";
 
+export interface NaviaMetrics {
+  steps: number;
+  toolCalls: number;
+  toolErrors: number;
+  /** Tokens de entrada (incluye cache read/creation) y de salida (solo provider API). */
+  tokensIn: number;
+  tokensOut: number;
+  /** Acciones exitosas que siguieron a un error (recuperación). */
+  recoveries: number;
+  /** Llamadas idénticas consecutivas (señal de bucle/atasco). */
+  loopHits: number;
+}
+
+/**
+ * Métricas del loop, encapsuladas. Antes los contadores + `lastSig`/`lastWasError` estaban sueltos
+ * y DUPLICADOS en los dos loops (fácil de desincronizar). Es una clase pura (sin I/O) → testeable.
+ * `implements NaviaMetrics` → la instancia se devuelve tal cual como `result.metrics`.
+ */
+export class LoopMetrics implements NaviaMetrics {
+  steps = 0;
+  toolCalls = 0;
+  toolErrors = 0;
+  tokensIn = 0;
+  tokensOut = 0;
+  recoveries = 0;
+  loopHits = 0;
+  private lastSig = "";
+  private lastWasError = false;
+
+  /** Registra una llamada a tool; cuenta `loopHits` si la firma (nombre+args) repite la anterior. */
+  recordCall(name: string, input: unknown): void {
+    this.toolCalls++;
+    const sig = `${name}:${JSON.stringify(input ?? {})}`;
+    if (sig === this.lastSig) this.loopHits++;
+    this.lastSig = sig;
+  }
+  /** Tool ejecutada con éxito; si venía de un error, cuenta una recuperación. */
+  recordSuccess(): void {
+    if (this.lastWasError) this.recoveries++;
+    this.lastWasError = false;
+  }
+  /** Tool que lanzó (error propagado). */
+  recordError(): void {
+    this.toolErrors++;
+    this.lastWasError = true;
+  }
+  addTokens(input: number, output: number): void {
+    this.tokensIn += input;
+    this.tokensOut += output;
+  }
+}
+
 /**
  * Construye el system prompt inyectando la memoria por dominio (playbooks/tips de `startUrl`).
  * Única definición (antes copiada en ambos loops). Devuelve el STRING; cada loop lo envuelve a su
