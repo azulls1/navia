@@ -14,6 +14,7 @@ import { loadSession } from "../browser/session-store.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
 import { tipsBlockFor } from "./domain-memory.js";
+import { OpenAICompatClient, resolveOpenAIPreset } from "../providers/openai-provider.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -31,10 +32,12 @@ export interface NaviaOptions {
   userDataDir?: string;
   /** Nombre de perfil guardado con `navia login` para arrancar autenticado. */
   profile?: string;
-  /** Motor de inferencia: "auto" (default), "api" (ANTHROPIC_API_KEY) o "claude-cli" (CLI de la terminal). */
-  provider?: "auto" | "api" | "claude-cli";
+  /** Motor de inferencia: "auto" (default), "api" (ANTHROPIC_API_KEY), "claude-cli" (CLI de la terminal) u "openai" (IA gratis vía endpoint OpenAI-compatible: Groq/Ollama/OpenRouter…). */
+  provider?: "auto" | "api" | "claude-cli" | "openai";
   /** Binario del CLI para provider claude-cli (default "claude"). */
   cliCommand?: string;
+  /** Preset del provider openai-compatible: "groq" | "openrouter" | "ollama" (o genérico vía env NAVIA_OPENAI_*). */
+  openaiPreset?: string;
   /** Registrar la corrida en JSONL: true (ruta por defecto) o una ruta de archivo. */
   record?: boolean | string;
   /** Crear carpeta-bitácora (memoria) por tarea: true (auto: Obsidian/Escritorio) o una ruta base. */
@@ -184,17 +187,29 @@ function setCacheBreakpoint(messages: Anthropic.MessageParam[]): void {
   if (rolling) rolling.cache_control = { type: "ephemeral" };
 }
 
+// Interfaz mínima que el loop necesita del cliente LLM (la cumplen tanto el SDK de Anthropic como
+// el shim OpenAI-compatible). Permite intercambiar el backend sin tocar el loop.
+type MessagesClient = { messages: { create: (params: any) => Promise<Anthropic.Message> } };
+
 export class BrowserAgent {
-  private client: Anthropic;
+  private client: MessagesClient;
   private opts: NaviaOptions;
   private hooks: AgentHooks;
+  /** true cuando el backend es un endpoint OpenAI-compatible gratis (Groq/Ollama/…) → sin visión. */
+  private readonly isOpenAI: boolean;
 
   constructor(opts: NaviaOptions) {
     this.opts = opts;
-    const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("Falta ANTHROPIC_API_KEY (pásala en opts.apiKey o como variable de entorno).");
-    // maxRetries cubre errores transitorios de la API (429/5xx) con backoff automático.
-    this.client = new Anthropic({ apiKey, maxRetries: 4 });
+    this.isOpenAI = opts.provider === "openai";
+    if (this.isOpenAI) {
+      // IA GRATIS: endpoint OpenAI-compatible. No requiere ANTHROPIC_API_KEY.
+      this.client = new OpenAICompatClient(resolveOpenAIPreset(opts.openaiPreset));
+    } else {
+      const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) throw new Error("Falta ANTHROPIC_API_KEY (pásala en opts.apiKey o como variable de entorno).");
+      // maxRetries cubre errores transitorios de la API (429/5xx) con backoff automático.
+      this.client = new Anthropic({ apiKey, maxRetries: 4 });
+    }
     this.hooks = {
       confirmAction: opts.hooks?.confirmAction ?? (async () => false),
       waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
@@ -231,12 +246,18 @@ export class BrowserAgent {
       storageState,
       allowDomains: this.opts.allowDomains,
     });
-    const policy: ToolPolicy = { allowEval: this.opts.allowEval, vision: true, captcha: this.opts.captcha }; // API: el modelo VE imágenes
+    // Anthropic API ve imágenes; el endpoint OpenAI-compatible gratis va SIN visión (como el CLI):
+    // no se mandan screenshots y el captcha lo resuelve el OCR local igualmente.
+    const policy: ToolPolicy = { allowEval: this.opts.allowEval, vision: !this.isOpenAI, captcha: this.opts.captcha };
 
     try {
       if (this.opts.startUrl) await driver.navigate(this.opts.startUrl);
 
-      const model = this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL;
+      // En OpenAI-compatible el modelo lo fija el preset/env (el shim cae a cfg.model si va vacío),
+      // NO el DEFAULT_MODEL de Anthropic (que no existe en Groq/Ollama).
+      const model = this.isOpenAI
+        ? (this.opts.model ?? process.env.NAVIA_OPENAI_MODEL ?? "")
+        : (this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL);
       const maxSteps = this.opts.maxSteps ?? 60;
       // Workspace = carpeta-bitácora (memoria) por tarea; si se pide, la grabación va también allí.
       let ws: Awaited<ReturnType<typeof createWorkspace>>["ws"] | undefined;
@@ -459,7 +480,7 @@ export class BrowserAgent {
 }
 
 /** Decide el proveedor: explícito, o auto (API key si existe; si no, CLI claude). */
-export function resolveProvider(opts: NaviaOptions): "api" | "claude-cli" {
+export function resolveProvider(opts: NaviaOptions): "api" | "claude-cli" | "openai" {
   if (opts.provider && opts.provider !== "auto") return opts.provider;
   return opts.apiKey || process.env.ANTHROPIC_API_KEY ? "api" : "claude-cli";
 }

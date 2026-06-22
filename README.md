@@ -48,7 +48,7 @@ npm i -g navia-ai   &&   navia
 - [CLI usage](#-cli-usage)
 - [Credentials, 2FA & sessions](#-credentials-2fa--sessions)
 - [Per-domain memory](#-per-domain-memory-playbooks)
-- [No API key (terminal AI)](#-no-api-key--use-your-terminals-ai-cli)
+- [No API key? Run it for free](#-no-api-key-run-it-for-free)
 - [Deterministic macros](#-deterministic-macros-record--replay-no-ai)
 - [Structured extraction](#-structured-extraction-web--typed-json)
 - [Library usage](#-library-usage)
@@ -80,6 +80,7 @@ navia extract "all clients with name, email and status" --url ... --schema clien
 | 🧠 **One instruction, not a script** | Describe the task in plain language; Navia discovers the buttons/fields and does the steps. No per-site coding. |
 | 📝 **Forms & data entry on autopilot** | Fills inputs, dropdowns, checkboxes, uploads files, submits, and **confirms it worked** — across multi-step flows. |
 | 🔁 **Do it once, repeat forever** | Record a flow and `replay` it daily **with no LLM, no API key** (free & fast). Self-heals if the site changes. |
+| 🆓 **Runs with no API key** | Use **free AI models** — local (Ollama) or cloud free-tier (Groq, OpenRouter) — via any OpenAI-compatible endpoint, or your `claude`/`ant` CLI. The wizard offers them when you have no key. |
 | 🪄 **Zero setup, nothing to remember** | Auto-detects login, **auto-downloads the browser**, **auto-installs the captcha reader**. You just answer the task. |
 | 🔓 **Text captchas solved automatically & free** | Local OCR reads "PCF53"-style captchas **on your machine** — no paid service, no API, not the LLM. On by default. |
 | 🔐 **Secrets the model never sees** | Encrypted vault for passwords/2FA, **domain-bound** (anti-phishing). Injected locally, outside the prompt. |
@@ -260,16 +261,36 @@ Tips are also captured automatically from your `wait_for_human` notes. Disable w
 
 ---
 
-## 🔑 No API key — use your terminal's AI CLI
+## 🆓 No API key? Run it for free
 
-Navia can "think" with an AI CLI **already authenticated** on your terminal, with no `ANTHROPIC_API_KEY`:
+Navia works **without an Anthropic key**. The wizard auto-detects what you have; you have three free routes:
+
+### A) Free AI models — local or cloud (`--provider openai`)
+Any **OpenAI-compatible** endpoint works (most free models expose one), via presets:
 
 ```bash
-navia run "..." --provider claude-cli                    # uses `claude` (Claude Code)
-navia run "..." --provider claude-cli --cli-command ant  # recommended: Anthropic CLI
+# Local, private, unlimited — needs Ollama + a model
+ollama pull qwen3:14b
+navia "log into my-portal.com and update my phone number" --provider openai --openai-preset ollama
+
+# Cloud, fast, free API key (no card) → console.groq.com/keys
+setx GROQ_API_KEY gsk_...        # (PowerShell: $env:GROQ_API_KEY="gsk_...")
+navia "..." --provider openai --openai-preset groq        # model: qwen3-32b
+
+# OpenRouter (many :free models) — get a key at openrouter.ai
+navia "..." --provider openai --openai-preset openrouter
+
+# Any other OpenAI-compatible endpoint (DeepSeek, Together, vLLM, LM Studio…):
+#   NAVIA_OPENAI_BASE_URL, NAVIA_OPENAI_API_KEY, NAVIA_OPENAI_MODEL
 ```
-- **`auto`** (default): API key if present; otherwise the `claude` CLI.
-- **`ant`** recommended: `ant auth login` once → clean single-shot completion over your login. `claude` works as a slower fallback.
+
+**Recommended free models (2026):** `qwen3-32b` via **Groq** (cloud, no card, strong tool-use) or **Ollama** `qwen3:14b`/`qwen3:32b` (local, private). Qwen3 is Apache-2.0 with the most reliable open tool-calling on consumer hardware. Vision is off on this route (the local captcha OCR still works). Note: free open models are less reliable than Claude on long multi-step loops — expect more retries.
+
+### B) Your terminal's AI CLI (uses your Claude subscription)
+```bash
+navia run "..." --provider claude-cli --cli-command ant   # `ant` (recommended) or `claude`
+```
+- **`auto`** (default): Anthropic API key if present; otherwise the `claude` CLI.
 - Any other terminal AI: `NAVIA_CLI_CMD="my-cli --flags"`.
 
 > CLI mode spawns one process per step → slower than `--provider api`, but needs no key. With the `claude`/`ant` CLI, Navia can also pass the captcha image to it for tasks that need vision.

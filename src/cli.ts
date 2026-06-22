@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.25.3");
+  .version("0.26.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -57,8 +57,9 @@ interface RunFlags {
   startUrl?: string;
   maxSteps?: string;
   profile?: string;
-  provider?: "auto" | "api" | "claude-cli";
+  provider?: "auto" | "api" | "claude-cli" | "openai";
   cliCommand?: string;
+  openaiPreset?: string;
   record?: boolean | string;
   yes?: boolean;
   workspace?: boolean | string;
@@ -229,7 +230,20 @@ async function runTask(task: string, flags: RunFlags) {
     if (!(await cmdExists(bin))) {
       console.error(
         pc.red(`✗ No hay motor de IA: el CLI "${bin}" no está instalado y no hay ANTHROPIC_API_KEY.`) +
-          pc.dim("\n  Soluciones: define ANTHROPIC_API_KEY (--provider api), instala el CLI 'claude'/'ant', o pásalo con --cli-command."),
+          pc.dim("\n  Soluciones: define ANTHROPIC_API_KEY (--provider api), instala el CLI 'claude'/'ant', usa IA gratis (--provider openai --openai-preset groq|ollama), o pásalo con --cli-command."),
+      );
+      process.exit(1);
+    }
+  }
+  if (provider === "openai") {
+    // IA gratis (Groq/OpenRouter/Ollama…). Validamos que haya key salvo Ollama (local, no la necesita).
+    const { resolveOpenAIPreset } = await import("./providers/openai-provider.js");
+    const oc = resolveOpenAIPreset(flags.openaiPreset);
+    const isLocal = /localhost|127\.0\.0\.1/.test(oc.baseURL);
+    if (!isLocal && !oc.apiKey) {
+      console.error(
+        pc.red(`✗ ${oc.label}: falta API key.`) +
+          pc.dim(`\n  Consíguela gratis y expórtala. Groq: GROQ_API_KEY · OpenRouter: OPENROUTER_API_KEY · o genérico: NAVIA_OPENAI_API_KEY. Local sin key: --openai-preset ollama.`),
       );
       process.exit(1);
     }
@@ -238,7 +252,12 @@ async function runTask(task: string, flags: RunFlags) {
   const rl = createInterface({ input, output });
   const ask = async (q: string) => (await rl.question(q)).trim();
 
-  const motor = provider === "claude-cli" ? `${flags.browser} · IA: CLI (${flags.cliCommand ?? "claude"})` : `${flags.browser} · IA: API`;
+  const motor =
+    provider === "claude-cli"
+      ? `${flags.browser} · IA: CLI (${flags.cliCommand ?? "claude"})`
+      : provider === "openai"
+        ? `${flags.browser} · IA: gratis (${(await import("./providers/openai-provider.js")).resolveOpenAIPreset(flags.openaiPreset).label})`
+        : `${flags.browser} · IA: API`;
   console.log(pc.cyan(`\n🌐 Navia — ${motor}\n`) + pc.dim(`Tarea: ${task}\n`));
 
   try {
@@ -254,6 +273,7 @@ async function runTask(task: string, flags: RunFlags) {
       profile: flags.profile,
       provider: flags.provider,
       cliCommand: flags.cliCommand,
+      openaiPreset: flags.openaiPreset,
       record: flags.record,
       workspace: flags.workspace === false ? false : (flags.workspace ?? cfg.workspace), // false = "no" explícito; no reactivar desde cfg
       maxSteps: flags.maxSteps ? Number(flags.maxSteps) : undefined,
@@ -381,6 +401,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
     //    API key si existe (rápido) → si no, el CLI claude/ant (gratis) → si no hay nada, pide la key.
     let provider: RunFlags["provider"];
     let cliCommand = base.cliCommand;
+    let openaiPreset = base.openaiPreset;
     if (process.env.ANTHROPIC_API_KEY) {
       provider = "api";
       console.log(pc.dim("🤖 Motor de IA: API key de Anthropic (rápido).\n"));
@@ -392,16 +413,43 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
         cliCommand = cliName;
         console.log(pc.dim(`🤖 Motor de IA: tu CLI '${cliName}' (gratis, más lento). Para más velocidad define ANTHROPIC_API_KEY.\n`));
       } else {
-        // No hay ningún motor → ahí SÍ pedimos la API key (no se puede funcionar sin LLM).
-        provider = "api";
-        console.log(pc.yellow("⚠️  No detecté un motor de IA (ni ANTHROPIC_API_KEY ni el CLI 'claude'/'ant')."));
-        const key = await askHidden(rl, pc.cyan("🔑 Pega tu ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "));
-        if (!key) {
-          console.log(pc.red("\n✗ Sin motor de IA no puedo continuar. Define ANTHROPIC_API_KEY o instala el CLI 'claude'."));
-          return;
+        // No hay ANTHROPIC_API_KEY ni CLI → ofrecemos IA GRATIS (sin pagar nada) o pegar una key.
+        console.log(pc.yellow("⚠️  No detecté API key de Anthropic ni el CLI 'claude'/'ant'. Puedes usar IA GRATIS:"));
+        console.log(`  ${pc.bold("1)")} 🦙 Local con ${pc.bold("Ollama")} ${pc.dim("(gratis, privado, sin límites; requiere instalar Ollama y un modelo, p.ej. 'ollama pull qwen3:14b')")}`);
+        console.log(`  ${pc.bold("2)")} ☁️  ${pc.bold("Groq")} en la nube ${pc.dim("(gratis, rápido; crea una API key gratis en console.groq.com — sin tarjeta)")}`);
+        console.log(`  ${pc.bold("3)")} 🔑 Pegar mi ${pc.bold("ANTHROPIC_API_KEY")} ${pc.dim("(de pago, máxima fiabilidad)")}`);
+        const choice = (await ask("Elige [1-3]", "1")).trim();
+        if (choice === "2") {
+          provider = "openai";
+          openaiPreset = "groq";
+          const gk = process.env.GROQ_API_KEY || (await askHidden(rl, pc.cyan("🔑 Pega tu GROQ_API_KEY (gsk_…, gratis en console.groq.com, no se muestra): ")));
+          if (!gk) {
+            console.log(pc.red("\n✗ Groq necesita una API key (gratis). Consíguela en https://console.groq.com/keys y vuelve a correr."));
+            return;
+          }
+          process.env.GROQ_API_KEY = gk;
+          console.log(pc.green("✓ Groq listo (modelo qwen3-32b, gratis).") + pc.dim(" (Para no repetir: $env:GROQ_API_KEY=…)\n"));
+        } else if (choice === "3") {
+          provider = "api";
+          const key = await askHidden(rl, pc.cyan("🔑 Pega tu ANTHROPIC_API_KEY (sk-ant-…, no se muestra): "));
+          if (!key) {
+            console.log(pc.red("\n✗ Sin motor de IA no puedo continuar."));
+            return;
+          }
+          process.env.ANTHROPIC_API_KEY = key;
+          console.log(pc.green("✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")\n'));
+        } else {
+          // Default: Ollama local.
+          provider = "openai";
+          openaiPreset = "ollama";
+          const model = process.env.NAVIA_OPENAI_MODEL || "qwen3:14b";
+          if (!(await cmdExists("ollama"))) {
+            console.log(pc.yellow(`\n⚠️  No veo 'ollama' instalado. Instálalo desde https://ollama.com y luego: ${pc.bold(`ollama pull ${model}`)}`));
+            console.log(pc.dim("   (Cuando esté corriendo, vuelve a ejecutar 'navia'.)"));
+            return;
+          }
+          console.log(pc.green(`✓ Usaré Ollama local (modelo ${model}).`) + pc.dim(` (Si no lo tienes: 'ollama pull ${model}'. Cambia con $env:NAVIA_OPENAI_MODEL)\n`));
         }
-        process.env.ANTHROPIC_API_KEY = key;
-        console.log(pc.green("✓ API key cargada para esta sesión.") + pc.dim(' (Para no repetir: $env:ANTHROPIC_API_KEY="sk-ant-…")\n'));
       }
     }
 
@@ -482,7 +530,8 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       `navia run ${JSON.stringify(taskPrompt)} --browser ${browser}` +
       (startUrl ? ` --start-url ${startUrl}` : "") +
       (captcha === "local" ? " --captcha local" : "") +
-      ` --provider ${provider}`;
+      ` --provider ${provider}` +
+      (provider === "openai" && openaiPreset ? ` --openai-preset ${openaiPreset}` : "");
     console.log(pc.dim("\n ─────────────────────────────────────────────"));
     console.log(" Voy a ejecutar:\n   " + pc.cyan(eq));
 
@@ -499,6 +548,7 @@ async function runWizard(base: Partial<RunFlags>): Promise<void> {
       browser,
       provider,
       cliCommand,
+      openaiPreset,
       workspace,
       captcha,
       chat: true, // el wizard es conversacional: al terminar pregunta "¿qué hago ahora?"
@@ -520,8 +570,9 @@ const browserOpt = (cmd: Command) =>
     .option("--cdp-endpoint <url>", "conectar a un Chrome ya abierto, ej http://localhost:9222")
     .option("--start-url <url>", "abrir esta URL antes de empezar")
     .option("-p, --profile <name>", "usar un perfil guardado con 'navia login' (arranca autenticado)", cfg.profile)
-    .option("--provider <p>", "motor de IA: auto | api | claude-cli (auto: API key si existe, si no el CLI claude)", cfg.provider || "auto")
+    .option("--provider <p>", "motor de IA: auto | api | claude-cli | openai (auto: API key si existe, si no el CLI claude)", cfg.provider || "auto")
     .option("--cli-command <bin>", "binario del CLI para --provider claude-cli: 'ant' (recomendado, completado limpio) o 'claude' (fallback). Default claude")
+    .option("--openai-preset <p>", "para --provider openai (IA GRATIS, endpoint OpenAI-compatible): groq | openrouter | ollama. O configura NAVIA_OPENAI_BASE_URL/_API_KEY/_MODEL")
     .option("--record [path]", "registrar la corrida en JSONL (default ~/.navia/trajectories/; o una ruta. Tip: usa --workspace para bitácora completa)")
     .option("--workspace [dir]", "crear carpeta-bitácora (memoria) por tarea (auto: Obsidian/Escritorio, o la ruta dada)")
     .option("--yes", "auto-aprobar acciones irreversibles (¡solo entornos de prueba!)")
