@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.26.1");
+  .version("0.26.2");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -612,7 +612,7 @@ program
   .description("Extraer datos estructurados de una página a JSON validado contra un schema (web → datos).")
   .option("--url <url>", "URL a abrir antes de extraer")
   .option("--schema <archivo>", "archivo .json con el schema JSON deseado")
-  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
   .option("-p, --profile <name>", "perfil guardado con 'navia login'")
   .option("-m, --model <model>", "modelo de Claude")
   .option("--headless", "ejecutar sin ventana visible")
@@ -656,7 +656,7 @@ program
 program
   .command("replay <archivo>")
   .description("Re-ejecutar una macro (JSONL de --record) de forma determinista, SIN IA ni API key.")
-  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
   .option("-p, --profile <name>", "perfil guardado con 'navia login'")
   .option("--headless", "ejecutar sin ventana visible")
   .action(async (archivo: string, opts: { browser: BrowserEngine; profile?: string; headless?: boolean }) => {
@@ -683,7 +683,7 @@ program
   .command("eval")
   .description("Evalúa Navia sobre un dataset de tareas (JSONL Online-Mind2Web-ish) con un juez LLM. Reporta tasa de éxito + métricas.")
   .option("--dataset <archivo>", "JSONL de tareas {task_id, task, url, level}; por defecto un set de muestra")
-  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome | patchright", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
   .option("-m, --model <model>", "modelo de Claude (agente y juez)")
   .option("--provider <p>", "motor de IA: auto | api | claude-cli", "auto")
   .option("--headless", "ejecutar sin ventana visible")
@@ -1038,7 +1038,7 @@ playbook
 program
   .command("login <perfil>")
   .description("Abre el navegador para que inicies sesión y guarda la sesión (cookies/almacenamiento) en un perfil reutilizable.")
-  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
   .option("--start-url <url>", "URL del login a abrir")
   .action(async (perfil: string, opts: { browser: BrowserEngine; startUrl?: string }) => {
     const rl = createInterface({ input, output });
@@ -1067,7 +1067,7 @@ program
 program
   .command("mcp")
   .description("Iniciar Navia como servidor MCP (stdio): expone sus herramientas de navegador a un cliente MCP.")
-  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || "chromium")
+  .option("-b, --browser <engine>", "motor: chromium | firefox | chrome", (process.env.NAVIA_BROWSER as BrowserEngine) || cfg.browser || "chromium")
   .option("-p, --profile <name>", "perfil guardado con 'navia login' (arranca autenticado)")
   .option("--headless", "ejecutar sin ventana visible")
   .option("--cdp-port <port>", "puerto de depuración para --browser chrome")

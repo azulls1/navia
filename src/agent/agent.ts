@@ -5,15 +5,14 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { BrowserDriver } from "../browser/driver.js";
-import { buildSystemPrompt } from "./system-prompt.js";
 import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
-import { tipsBlockFor } from "./domain-memory.js";
 import { OpenAICompatClient, resolveOpenAIPreset } from "../providers/openai-provider.js";
 import { DEFAULT_MAX_STEPS, resolveModel } from "../config.js";
-import { withDefaultHooks, resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX } from "./loop-common.js";
+import { withDefaultHooks, resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory } from "./loop-common.js";
+import { createAnthropic } from "../providers/anthropic-client.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -197,10 +196,7 @@ export class BrowserAgent {
       // IA GRATIS: endpoint OpenAI-compatible. No requiere ANTHROPIC_API_KEY.
       this.client = new OpenAICompatClient(resolveOpenAIPreset(opts.openaiPreset));
     } else {
-      const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) throw new Error("Falta ANTHROPIC_API_KEY (pásala en opts.apiKey o como variable de entorno).");
-      // maxRetries cubre errores transitorios de la API (429/5xx) con backoff automático.
-      this.client = new Anthropic({ apiKey, maxRetries: 4 });
+      this.client = createAnthropic(opts.apiKey);
     }
     this.hooks = withDefaultHooks(opts.hooks);
   }
@@ -275,9 +271,7 @@ export class BrowserAgent {
       };
       await recorder.log({ type: "start", task: this.opts.task, engine, model, provider: this.isOpenAI ? "openai" : "api" });
       // Memoria por dominio: inyecta tips aprendidos del dominio (de startUrl) si los hay.
-      const memoryExtra = this.opts.memory === false ? "" : await tipsBlockFor(this.opts.startUrl);
-      if (memoryExtra) this.hooks.log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
-      const system = buildSystemPrompt([this.opts.systemExtra, memoryExtra].filter(Boolean).join("\n\n") || undefined);
+      const system = await buildSystemWithMemory(this.opts, this.hooks.log);
       // Breakpoints de caché estáticos: system (constante) y el bloque de tools (constante).
       const systemBlocks: Anthropic.TextBlockParam[] = [
         { type: "text", text: system, cache_control: { type: "ephemeral" } },

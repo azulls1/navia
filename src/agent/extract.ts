@@ -31,6 +31,7 @@ import { BrowserDriver } from "../browser/driver.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { resolveModel } from "../config.js";
 import { resolveProfileState } from "./loop-common.js";
+import { createAnthropic } from "../providers/anthropic-client.js";
 
 export interface ExtractOptions {
   /** Qué extraer, en lenguaje natural. */
@@ -82,7 +83,7 @@ export async function extract<T = unknown>(opts: ExtractOptions): Promise<T> {
     const pageContent = `TEXTO DE LA PÁGINA:\n${text}\n\nESTRUCTURA (árbol de accesibilidad):\n${snapshot}`.slice(0, MAX_CHARS);
 
     const { schema, wrapped } = asObjectSchema(opts.schema);
-    const client = new Anthropic({ apiKey, maxRetries: 4 });
+    const client = createAnthropic(apiKey);
     const tool: Anthropic.Tool = {
       name: "extract",
       description: "Devuelve los datos extraídos de la página conforme al schema. Usa null/omite los campos que no encuentres; no inventes.",

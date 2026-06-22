@@ -13,6 +13,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { runNavia, type NaviaOptions, type NaviaMetrics } from "./agent.js";
 import { resolveModel } from "../config.js";
+import { createAnthropic } from "../providers/anthropic-client.js";
 
 export interface EvalTask {
   task_id: string;
@@ -61,9 +62,8 @@ export async function judgeTask(
   summary: string,
   opts: { apiKey?: string; model?: string } = {},
 ): Promise<{ success: boolean; reason: string }> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("judgeTask requiere ANTHROPIC_API_KEY.");
-  const client = new Anthropic({ apiKey, maxRetries: 4 });
+  if (!(opts.apiKey ?? process.env.ANTHROPIC_API_KEY)) throw new Error("judgeTask requiere ANTHROPIC_API_KEY.");
+  const client = createAnthropic(opts.apiKey);
   const resp = await client.messages.create({
     model: resolveModel(opts.model),
     max_tokens: 512,

@@ -9,15 +9,13 @@
 import os from "node:os";
 import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
-import { buildSystemPrompt } from "./system-prompt.js";
 import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
 import { cliComplete } from "../providers/cli-provider.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
-import { tipsBlockFor } from "./domain-memory.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
 import { DEFAULT_MAX_STEPS } from "../config.js";
-import { resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX } from "./loop-common.js";
+import { resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX, buildSystemWithMemory } from "./loop-common.js";
 
 function extractJson(s: string): any | null {
   if (!s) return null;
@@ -117,9 +115,7 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
     if (opts.startUrl) await driver.navigate(opts.startUrl);
 
     // Memoria por dominio: inyecta tips aprendidos del dominio (de startUrl) si los hay.
-    const memoryExtra = opts.memory === false ? "" : await tipsBlockFor(opts.startUrl);
-    if (memoryExtra) hooks.log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
-    const system = buildSystemPrompt([opts.systemExtra, memoryExtra].filter(Boolean).join("\n\n") || undefined);
+    const system = await buildSystemWithMemory(opts, hooks.log);
     const toolCatalog = toolDefinitions(policy).map(
       (t) => `- ${t.name}: ${t.description}\n    args: ${JSON.stringify((t.input_schema as any).properties ?? {})}`,
     ).join("\n");

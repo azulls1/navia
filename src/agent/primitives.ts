@@ -26,6 +26,7 @@ import { BrowserDriver } from "../browser/driver.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { resolveModel } from "../config.js";
 import { resolveProfileState } from "./loop-common.js";
+import { createAnthropic } from "../providers/anthropic-client.js";
 
 export interface ObserveAction {
   action: "click" | "type" | "select_option" | "press_key";
@@ -112,7 +113,7 @@ export async function observe(opts: ObserveOptions): Promise<ObserveAction[]> {
   try {
     if (opts.url) await driver.navigate(opts.url);
     const snapshot = await driver.snapshot();
-    const client = new Anthropic({ apiKey, maxRetries: 4 });
+    const client = createAnthropic(apiKey);
     const resp = await client.messages.create({
       model: resolveModel(opts.model),
       max_tokens: 2048,

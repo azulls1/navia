@@ -59,7 +59,7 @@ export async function startMcpServer(opts: McpOptions): Promise<void> {
     inputSchema: t.input_schema as Record<string, unknown>,
   }));
 
-  const server = new Server({ name: "navia", version: "0.26.1" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "navia", version: "0.26.2" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 

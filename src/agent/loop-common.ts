@@ -10,9 +10,25 @@ import type { BrowserDriver } from "../browser/driver.js";
 import type { BrowserEngine } from "../browser/launch.js";
 import { loadSession } from "../browser/session-store.js";
 import type { AgentHooks } from "./tools.js";
+import { buildSystemPrompt } from "./system-prompt.js";
+import { tipsBlockFor } from "./domain-memory.js";
 
 /** Prefijo del mensaje al encadenar una nueva tarea en la misma sesión (modo chat/conversacional). */
 export const NEXT_TASK_PREFIX = "Nueva tarea (misma sesión del navegador):";
+
+/**
+ * Construye el system prompt inyectando la memoria por dominio (playbooks/tips de `startUrl`).
+ * Única definición (antes copiada en ambos loops). Devuelve el STRING; cada loop lo envuelve a su
+ * manera (bloque con cache_control en API, texto plano en CLI).
+ */
+export async function buildSystemWithMemory(
+  opts: { systemExtra?: string; memory?: boolean; startUrl?: string },
+  log?: (m: string) => void,
+): Promise<string> {
+  const memoryExtra = opts.memory === false ? "" : await tipsBlockFor(opts.startUrl);
+  if (memoryExtra) log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
+  return buildSystemPrompt([opts.systemExtra, memoryExtra].filter(Boolean).join("\n\n") || undefined);
+}
 
 /** Rellena los hooks opcionales con no-ops seguros. Única definición (antes duplicada 2 veces). */
 export function withDefaultHooks(partial?: Partial<AgentHooks>): AgentHooks {
