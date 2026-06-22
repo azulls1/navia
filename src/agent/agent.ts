@@ -184,7 +184,12 @@ export class BrowserAgent {
     this.isOpenAI = opts.provider === "openai";
     if (this.isOpenAI) {
       // IA GRATIS: endpoint OpenAI-compatible. No requiere ANTHROPIC_API_KEY.
-      this.client = new OpenAICompatClient(resolveOpenAIPreset(opts.openaiPreset));
+      const log = opts.hooks?.log;
+      this.client = new OpenAICompatClient(
+        resolveOpenAIPreset(opts.openaiPreset),
+        log ? (chunk: string) => log(chunk) : undefined, // streamHook: tokens en tiempo real (Groq/OpenRouter)
+        log ? (attempt: number, waitMs: number, reason: string) => log(`⚠️ Reintento ${attempt}/3 (${reason}), esperando ${Math.round(waitMs)}ms`) : undefined, // onRetry
+      );
     } else {
       this.client = createAnthropic(opts.apiKey);
     }
@@ -295,6 +300,7 @@ export class BrowserAgent {
         let steps = 0;
         let summary: string | null = null;
         let validateAttempts = 0;
+        let truncationContinues = 0; // veces que pedimos continuar tras un truncado por longitud (tope anti-bucle)
         while (steps < maxSteps) {
           steps++;
           totalSteps++;
@@ -323,6 +329,14 @@ export class BrowserAgent {
           }
 
           if (response.stop_reason !== "tool_use" || toolUses.length === 0) {
+            // Respuesta CORTADA por longitud (max_tokens) sin pedir tool: el modelo no terminó.
+            // En vez de tomar un resumen a medias como final, le pedimos continuar (tope anti-bucle).
+            if (response.stop_reason === "max_tokens" && truncationContinues < 2) {
+              truncationContinues++;
+              this.hooks.log?.("✂️ Respuesta truncada por longitud; pido continuar.");
+              messages.push({ role: "user", content: [{ type: "text", text: "Tu respuesta anterior se cortó por longitud. Continúa exactamente donde quedaste (no repitas lo ya dicho)." }] });
+              continue;
+            }
             const candidate = response.content
               .filter((b): b is Anthropic.TextBlock => b.type === "text")
               .map((b) => b.text)

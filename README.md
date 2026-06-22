@@ -284,7 +284,7 @@ navia "..." --provider openai --openai-preset openrouter
 #   NAVIA_OPENAI_BASE_URL, NAVIA_OPENAI_API_KEY, NAVIA_OPENAI_MODEL
 ```
 
-**Recommended free models (2026):** `qwen3-32b` via **Groq** (cloud, no card, strong tool-use) or **Ollama** `qwen3:14b`/`qwen3:32b` (local, private). Qwen3 is Apache-2.0 with the most reliable open tool-calling on consumer hardware. Vision is off on this route (the local captcha OCR still works). Note: free open models are less reliable than Claude on long multi-step loops — expect more retries.
+**Recommended free models (2026):** `qwen3-32b` via **Groq** (cloud, no card, strong tool-use) or **Ollama** `qwen3:14b`/`qwen3:32b` (local, private). Qwen3 is Apache-2.0 with the most reliable open tool-calling on consumer hardware. Vision is off on this route (the local captcha OCR still works). With Groq/OpenRouter you get **real-time token streaming** in the terminal, and the client retries transient errors with **exponential backoff + jitter**. Note: free open models are less reliable than Claude on long multi-step loops — expect more retries.
 
 ### B) Your terminal's AI CLI (uses your Claude subscription)
 ```bash

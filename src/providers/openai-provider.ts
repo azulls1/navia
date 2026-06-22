@@ -163,14 +163,47 @@ function fromOpenAIResponse(json: any): Anthropic.Message {
   } as Anthropic.Message;
 }
 
+/** Callback que recibe fragmentos de texto del LLM en tiempo real (streaming SSE). */
+export type StreamHook = (chunk: string) => void;
+
 /**
- * Cliente que imita `anthropic.messages.create`. Traduce a `/v1/chat/completions`, con reintentos
- * básicos para errores transitorios (429/5xx). `tool_choice:"auto"` para que el modelo elija tool o texto.
+ * Delay (ms) para un reintento: backoff EXPONENCIAL con jitter. `min(base·2^intento + jitter, cap)`.
+ * Exponencial (no lineal) para no amplificar la sobrecarga del proveedor ante 429/5xx; jitter para
+ * desincronizar reintentos concurrentes. Defaults: base 500ms, cap 30s.
+ */
+export function calcDelay(attempt: number, base = 500, cap = 30_000): number {
+  const jitter = Math.random() * 200;
+  return Math.min(base * Math.pow(2, attempt) + jitter, cap);
+}
+
+/** Error interno con metadatos de reintento. `fastFail`: 4xx no-429 → no reintentar. */
+interface RetryError extends Error {
+  fastFail?: boolean;
+  reason?: string;
+}
+function retryError(message: string, opts: { fastFail?: boolean; reason?: string }): RetryError {
+  const e = new Error(message) as RetryError;
+  if (opts.fastFail) e.fastFail = true;
+  if (opts.reason) e.reason = opts.reason;
+  return e;
+}
+
+/**
+ * Cliente que imita `anthropic.messages.create`. Traduce a `/v1/chat/completions`.
+ * - Reintentos con backoff exponencial+jitter en 429/5xx y errores de red; 4xx no-429 fallan al instante.
+ * - `streamHook` (opcional): si el preset es Groq/OpenRouter, consume SSE y emite tokens en tiempo real.
+ * - `onRetry` (opcional): observabilidad de cada reintento.
+ * - `sleep` inyectable: para tests sin temporizadores reales.
  */
 export class OpenAICompatClient {
   readonly messages: { create: (params: any) => Promise<Anthropic.Message> };
 
-  constructor(private cfg: OpenAIPresetConfig) {
+  constructor(
+    private cfg: OpenAIPresetConfig,
+    private streamHook?: StreamHook,
+    private onRetry?: (attempt: number, waitMs: number, reason: string) => void,
+    private sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  ) {
     this.messages = { create: (params: any) => this.create(params) };
   }
 
@@ -186,27 +219,103 @@ export class OpenAICompatClient {
     const url = this.cfg.baseURL.replace(/\/$/, "") + "/chat/completions";
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(this.cfg.headers ?? {}) };
     if (this.cfg.apiKey) headers.Authorization = `Bearer ${this.cfg.apiKey}`;
+    // Streaming solo si hay hook Y el proveedor lo soporta bien (Groq/OpenRouter).
+    const useStream = !!this.streamHook && (this.cfg.label === "Groq" || this.cfg.label === "OpenRouter");
 
     let lastErr: Error | null = null;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
-        if (res.status === 429 || res.status >= 500) {
-          lastErr = new Error(`${this.cfg.label} HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-          await new Promise((r) => setTimeout(r, 800 * (attempt + 1))); // backoff lineal
-          continue;
-        }
-        if (!res.ok) throw new Error(`${this.cfg.label} HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-        return fromOpenAIResponse(await res.json());
+        return useStream ? await this.attemptStream(url, headers, body) : await this.attemptOnce(url, headers, body);
       } catch (e) {
-        lastErr = e as Error;
-        if (attempt === 3) break;
-        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        const err = e as RetryError;
+        lastErr = err;
+        if (err.fastFail) throw err; // 4xx no-429 → no reintentar
+        if (attempt === 3) break; // último intento: sin sleep
+        const waitMs = calcDelay(attempt);
+        this.onRetry?.(attempt + 1, waitMs, err.reason ?? err.message);
+        await this.sleep(waitMs);
       }
     }
     throw new Error(`No se pudo contactar al modelo (${this.cfg.label} · ${this.cfg.baseURL}): ${lastErr?.message ?? "desconocido"}`);
   }
+
+  /** Un intento NO-streaming. Lanza RetryError (reintentable o fastFail) según el status. */
+  private async attemptOnce(url: string, headers: Record<string, string>, body: any): Promise<Anthropic.Message> {
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    if (res.status === 429 || res.status >= 500) throw retryError(`${this.cfg.label} HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`, { reason: `HTTP ${res.status}` });
+    if (!res.ok) throw retryError(`${this.cfg.label} HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`, { fastFail: true });
+    return fromOpenAIResponse(await res.json());
+  }
+
+  /** Un intento STREAMING (SSE): emite `delta.content` por `streamHook` y acumula tool_calls. */
+  private async attemptStream(url: string, headers: Record<string, string>, body: any): Promise<Anthropic.Message> {
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ ...body, stream: true }) });
+    if (res.status === 429 || res.status >= 500) throw retryError(`${this.cfg.label} HTTP ${res.status}`, { reason: `HTTP ${res.status}` });
+    if (!res.ok) throw retryError(`${this.cfg.label} HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`, { fastFail: true });
+    if (!res.body) throw new Error("respuesta de streaming sin cuerpo"); // reintentable (como error de red)
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let accText = "";
+    const toolAccum = new Map<number, { id: string; name: string; args: string }>();
+    let model = body.model;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const payload = t.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(payload);
+          if (chunk?.model) model = chunk.model;
+          const delta = chunk?.choices?.[0]?.delta;
+          if (typeof delta?.content === "string" && delta.content.length) {
+            accText += delta.content;
+            this.streamHook!(delta.content);
+          }
+          for (const tc of delta?.tool_calls ?? []) {
+            const idx = tc.index ?? 0;
+            if (!toolAccum.has(idx)) toolAccum.set(idx, { id: tc.id ?? "", name: tc.function?.name ?? "", args: "" });
+            const entry = toolAccum.get(idx)!;
+            if (tc.id) entry.id = tc.id;
+            if (tc.function?.name) entry.name = tc.function.name;
+            if (tc.function?.arguments) entry.args += tc.function.arguments;
+          }
+        } catch {
+          /* chunk SSE malformado → se descarta y se sigue acumulando */
+        }
+      }
+    }
+    const blocks: any[] = [];
+    if (accText.trim()) blocks.push({ type: "text", text: accText });
+    for (const [, tc] of [...toolAccum.entries()].sort(([a], [b]) => a - b)) {
+      let input: any = {};
+      try {
+        input = JSON.parse(tc.args || "{}");
+      } catch {
+        input = {};
+      }
+      blocks.push({ type: "tool_use", id: tc.id || `call_${blocks.length}`, name: tc.name, input });
+    }
+    const hadTool = toolAccum.size > 0;
+    return {
+      id: "stream_msg",
+      type: "message",
+      role: "assistant",
+      model,
+      content: blocks as any,
+      stop_reason: hadTool ? "tool_use" : "end_turn",
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } as any,
+    } as Anthropic.Message;
+  }
 }
 
-// Exporta los traductores para tests unitarios.
-export const __test = { toOpenAITools, toOpenAIMessages, fromOpenAIResponse };
+// Exporta helpers internos para tests unitarios (incluye calcDelay para probar el backoff sin timers).
+export const __test = { toOpenAITools, toOpenAIMessages, fromOpenAIResponse, calcDelay };

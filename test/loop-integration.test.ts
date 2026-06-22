@@ -5,6 +5,7 @@
  * romper comportamiento: ejercita dispatch de tools, conteo de métricas, anti-bucle y fin por texto.
  */
 import { describe, it, expect, afterEach } from "vitest";
+import fc from "fast-check";
 import http from "node:http";
 import { runNavia } from "../src/agent/agent.js";
 
@@ -39,6 +40,10 @@ function toolTurn(name: string, args: object, id: string) {
 function textTurn(text: string) {
   return { choices: [{ message: { content: text }, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 3 } };
 }
+/** Turno truncado por longitud (finish_reason: "length"). */
+function lengthTurn(text = "respuesta a medi") {
+  return { choices: [{ message: { content: text }, finish_reason: "length" }], usage: { prompt_tokens: 5, completion_tokens: 3 } };
+}
 
 describe("integración · loop de agente (LLM mock + navegador real)", () => {
   it("ejecuta tools, cuenta métricas/anti-bucle y termina por texto", async () => {
@@ -61,4 +66,52 @@ describe("integración · loop de agente (LLM mock + navegador real)", () => {
     expect(result.metrics.loopHits).toBeGreaterThanOrEqual(1); // la 2ª wait_for repite la firma
     expect(result.steps).toBeGreaterThanOrEqual(3);
   }, 60_000);
+
+  it("una respuesta truncada (finish_reason length) no cuenta como error y el loop continúa", async () => {
+    const base = await mockLLM([lengthTurn(), toolTurn("wait_for", { time_ms: 10 }, "c1"), textTurn("Hecho tras truncado.")]);
+    process.env.NAVIA_OPENAI_BASE_URL = base;
+    process.env.NAVIA_OPENAI_MODEL = "mock";
+    const result = await runNavia({ task: "t", provider: "openai", headless: true, startUrl: "data:text/html,<h1>x</h1>", maxSteps: 6 });
+    expect(result.metrics.toolErrors).toBe(0);
+    expect(result.steps).toBeGreaterThanOrEqual(2);
+  }, 60_000);
+
+  it("al alcanzar maxSteps termina exacto y reporta el mensaje de máximo de pasos", async () => {
+    const base = await mockLLM([toolTurn("wait_for", { time_ms: 5 }, "loop")]); // el mock SIEMPRE repite tool → nunca termina solo
+    process.env.NAVIA_OPENAI_BASE_URL = base;
+    process.env.NAVIA_OPENAI_MODEL = "mock";
+    const result = await runNavia({ task: "bucle", provider: "openai", headless: true, startUrl: "data:text/html,<h1>x</h1>", maxSteps: 2 });
+    expect(result.steps).toBe(2);
+    expect(result.summary).toMatch(/m[aá]ximo/i);
+  }, 60_000);
+
+  // Feature: end-to-end-validation-improvements, Property 13: terminación por max-steps exacta para cualquier N
+  it("P13 · termina en exactamente N pasos para cualquier maxSteps (1..3)", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 3 }), async (n) => {
+        let i = 0;
+        const server = http.createServer((req, res) => {
+          let b = "";
+          req.on("data", (c) => (b += c));
+          req.on("end", () => {
+            i++;
+            res.setHeader("content-type", "application/json");
+            res.end(JSON.stringify(toolTurn("wait_for", { time_ms: 5 }, `s${i}`))); // siempre tool → nunca termina
+          });
+        });
+        await new Promise<void>((r) => server.listen(0, r));
+        process.env.NAVIA_OPENAI_BASE_URL = `http://127.0.0.1:${(server.address() as any).port}/v1`;
+        process.env.NAVIA_OPENAI_MODEL = "mock";
+        try {
+          const result = await runNavia({ task: "n", provider: "openai", headless: true, startUrl: "data:text/html,<h1>x</h1>", maxSteps: n });
+          return result.steps === n && /m[aá]ximo/i.test(result.summary);
+        } finally {
+          server.close();
+          delete process.env.NAVIA_OPENAI_BASE_URL;
+          delete process.env.NAVIA_OPENAI_MODEL;
+        }
+      }),
+      { numRuns: 3 }, // cada iteración lanza un navegador real → pocas corridas
+    );
+  }, 120_000);
 });

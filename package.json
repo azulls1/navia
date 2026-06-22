@@ -1,6 +1,6 @@
 {
   "name": "navia-ai",
-  "version": "0.26.3",
+  "version": "0.27.0",
   "description": "Agente de navegador autónomo con IA (Claude). Abre Chrome o Firefox reales, lee la página y la opera con una sola instrucción en lenguaje natural. Incluye truco CDP anti-Cloudflare.",
   "type": "module",
   "bin": {
@@ -71,6 +71,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "fast-check": "^4.8.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.0",
     "vitest": "^3.0.0"
