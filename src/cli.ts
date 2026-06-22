@@ -23,7 +23,7 @@ import { startMcpServer } from "./mcp/server.js";
 import os from "node:os";
 import path from "node:path";
 import type { BrowserEngine } from "./browser/launch.js";
-import { loadConfigSync, saveConfig, configPath, type NaviaConfig } from "./config.js";
+import { loadConfigSync, saveConfig, type NaviaConfig } from "./config.js";
 
 loadEnv({ quiet: true });
 
@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.26.0");
+  .version("0.26.1");
 
 interface RunFlags {
   browser: BrowserEngine;

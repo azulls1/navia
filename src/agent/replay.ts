@@ -7,10 +7,8 @@
  * desde el vault en cada replay.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
-import { loadSession } from "../browser/session-store.js";
+import { resolveProfileState } from "./loop-common.js";
 import { getSecret, getTotpSecret } from "../secrets/vault.js";
 import { totp } from "../secrets/totp.js";
 import { bestRefMatch, type Descriptor } from "./heal.js";
@@ -41,12 +39,7 @@ export async function replayMacro(file: string, opts: NaviaOptions, log?: (m: st
     .filter((e) => e && e.type === "action" && e.ok !== false);
 
   const engine = opts.browser ?? "chromium";
-  let storageState: unknown;
-  let userDataDir = opts.userDataDir;
-  if (opts.profile) {
-    if (engine === "chrome") userDataDir = userDataDir ?? path.join(os.homedir(), ".navia", "profiles", `chrome-${opts.profile}`);
-    else storageState = (await loadSession(opts.profile)) ?? undefined;
-  }
+  const { userDataDir, storageState } = await resolveProfileState(engine, opts.profile, opts.userDataDir);
 
   const driver = await BrowserDriver.create({
     engine,

@@ -4,17 +4,16 @@
  * el navegador y le devolvemos el resultado, hasta que termina con un resumen en texto.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import os from "node:os";
-import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
 import type { BrowserEngine } from "../browser/launch.js";
-import { loadSession } from "../browser/session-store.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
 import { tipsBlockFor } from "./domain-memory.js";
 import { OpenAICompatClient, resolveOpenAIPreset } from "../providers/openai-provider.js";
+import { DEFAULT_MAX_STEPS, resolveModel } from "../config.js";
+import { withDefaultHooks, resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX } from "./loop-common.js";
 
 export interface NaviaOptions {
   /** Instrucción en lenguaje natural de lo que se quiere lograr. */
@@ -90,7 +89,6 @@ export interface NaviaResult {
   metrics?: NaviaMetrics;
 }
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 /** Tool del validador post-tarea: el juez SOLO puede responder con este veredicto tipado. */
 const VERDICT_TOOL: Anthropic.Tool = {
@@ -107,12 +105,6 @@ const VERDICT_TOOL: Anthropic.Tool = {
   },
 };
 
-/**
- * Pone un breakpoint de prompt caching rodante en el último bloque del último mensaje
- * (quitando los previos para no exceder los 4 breakpoints de Anthropic). Junto con los
- * breakpoints estáticos de system y tools, cachea el prefijo creciente de la conversación
- * → ~70-90% menos de coste/latencia de input en cada turno.
- */
 /** Marcador del snapshot inline que devuelven navigate y cada acción (auto-snapshot). */
 const INLINE_SNAPSHOT_MARK = "--- página";
 
@@ -210,30 +202,17 @@ export class BrowserAgent {
       // maxRetries cubre errores transitorios de la API (429/5xx) con backoff automático.
       this.client = new Anthropic({ apiKey, maxRetries: 4 });
     }
-    this.hooks = {
-      confirmAction: opts.hooks?.confirmAction ?? (async () => false),
-      waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
-      log: opts.hooks?.log,
-      onTaskSummary: opts.hooks?.onTaskSummary,
-      nextTask: opts.hooks?.nextTask,
-      rememberNote: opts.hooks?.rememberNote,
-    };
+    this.hooks = withDefaultHooks(opts.hooks);
   }
 
   async run(): Promise<NaviaResult> {
     const engine = this.opts.browser ?? "chromium";
 
-    // Perfil: en chrome (CDP) la persistencia es el userDataDir; en chromium/firefox
-    // se inyecta el storageState guardado.
-    let storageState: unknown;
-    let userDataDir = this.opts.userDataDir;
-    if (this.opts.profile) {
-      if (engine === "chrome") {
-        userDataDir = userDataDir ?? path.join(os.homedir(), ".navia", "profiles", `chrome-${this.opts.profile}`);
-      } else {
-        storageState = (await loadSession(this.opts.profile)) ?? undefined;
-        this.hooks.log?.(storageState ? `Perfil "${this.opts.profile}" cargado.` : `Perfil "${this.opts.profile}" no encontrado; arranco sin sesión.`);
-      }
+    // Perfil: en chrome (CDP) la persistencia es el userDataDir; en otros motores el storageState.
+    const prof = await resolveProfileState(engine, this.opts.profile, this.opts.userDataDir);
+    const { userDataDir, storageState } = prof;
+    if (this.opts.profile && engine !== "chrome") {
+      this.hooks.log?.(prof.loaded ? `Perfil "${this.opts.profile}" cargado.` : `Perfil "${this.opts.profile}" no encontrado; arranco sin sesión.`);
     }
 
     const driver = await BrowserDriver.create({
@@ -255,10 +234,8 @@ export class BrowserAgent {
 
       // En OpenAI-compatible el modelo lo fija el preset/env (el shim cae a cfg.model si va vacío),
       // NO el DEFAULT_MODEL de Anthropic (que no existe en Groq/Ollama).
-      const model = this.isOpenAI
-        ? (this.opts.model ?? process.env.NAVIA_OPENAI_MODEL ?? "")
-        : (this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL);
-      const maxSteps = this.opts.maxSteps ?? 60;
+      const model = this.isOpenAI ? (this.opts.model ?? process.env.NAVIA_OPENAI_MODEL ?? "") : resolveModel(this.opts.model);
+      const maxSteps = this.opts.maxSteps ?? DEFAULT_MAX_STEPS;
       // Workspace = carpeta-bitácora (memoria) por tarea; si se pide, la grabación va también allí.
       let ws: Awaited<ReturnType<typeof createWorkspace>>["ws"] | undefined;
       if (this.opts.workspace) {
@@ -296,7 +273,7 @@ export class BrowserAgent {
           return { done: true, reason: "validador no disponible (no bloquea)" };
         }
       };
-      await recorder.log({ type: "start", task: this.opts.task, engine, model: this.opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL, provider: "api" });
+      await recorder.log({ type: "start", task: this.opts.task, engine, model, provider: this.isOpenAI ? "openai" : "api" });
       // Memoria por dominio: inyecta tips aprendidos del dominio (de startUrl) si los hay.
       const memoryExtra = this.opts.memory === false ? "" : await tipsBlockFor(this.opts.startUrl);
       if (memoryExtra) this.hooks.log?.(`🧠 Playbook del dominio cargado (${memoryExtra.split("\n").length - 1} tip(s)).`);
@@ -372,20 +349,11 @@ export class BrowserAgent {
               .trim();
             // Verificación DETERMINISTA de login (mata el falso positivo "el form desapareció = entré").
             if (loginContext && loginVerifyFails < 2) {
-              const outcome = await driver.assessLoginOutcome(this.opts.startUrl);
-              if (outcome.status === "failed") {
+              const reinject = await assessLoginReinjection(driver, this.opts.startUrl, this.hooks.log);
+              if (reinject) {
                 loginVerifyFails++;
-                this.hooks.log?.(`🔎 Login NO confirmado: ${outcome.detail}`);
-                await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(outcome.detail) });
-                messages.push({
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: `Verificación automática de login: NO tuvo éxito (${outcome.detail}). NO declares éxito. Reintenta así: 1 snapshot → reescribe el usuario → fill_credential la contraseña → pulsa 'Ingresar' (el sistema rellena el captcha solo). NO leas ni teclees el captcha tú. Si tras 2-3 intentos sigue fallando, resume el fallo y termina.`,
-                    },
-                  ],
-                });
+                await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(reinject.detail) });
+                messages.push({ role: "user", content: [{ type: "text", text: reinject.message }] });
                 continue;
               }
             }
@@ -471,7 +439,7 @@ export class BrowserAgent {
           metrics.steps = totalSteps;
           return { summary, steps: totalSteps, metrics };
         }
-        messages.push({ role: "user", content: [{ type: "text", text: `Nueva tarea (misma sesión del navegador): ${next}` }] });
+        messages.push({ role: "user", content: [{ type: "text", text: `${NEXT_TASK_PREFIX} ${next}` }] });
       }
     } finally {
       await driver.close();
@@ -488,15 +456,7 @@ export function resolveProvider(opts: NaviaOptions): "api" | "claude-cli" | "ope
 export async function runNavia(opts: NaviaOptions): Promise<NaviaResult> {
   if (resolveProvider(opts) === "claude-cli") {
     const { runViaCli } = await import("./cli-agent.js");
-    const hooks: AgentHooks = {
-      confirmAction: opts.hooks?.confirmAction ?? (async () => false),
-      waitForHuman: opts.hooks?.waitForHuman ?? (async () => ""),
-      log: opts.hooks?.log,
-      onTaskSummary: opts.hooks?.onTaskSummary,
-      nextTask: opts.hooks?.nextTask,
-      rememberNote: opts.hooks?.rememberNote,
-    };
-    return runViaCli(opts, hooks);
+    return runViaCli(opts, withDefaultHooks(opts.hooks));
   }
   return new BrowserAgent(opts).run();
 }

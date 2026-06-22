@@ -11,11 +11,9 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import os from "node:os";
-import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { TOOL_DEFINITIONS, dispatchTool, type AgentHooks } from "../agent/tools.js";
-import { loadSession } from "../browser/session-store.js";
+import { resolveProfileState } from "../agent/loop-common.js";
 import { getSecret, getTotpSecret, setSecret, setTotp } from "../secrets/vault.js";
 import type { BrowserEngine } from "../browser/launch.js";
 
@@ -36,12 +34,7 @@ export async function startMcpServer(opts: McpOptions): Promise<void> {
 
   const getDriver = async (): Promise<BrowserDriver> => {
     if (driver) return driver;
-    let storageState: unknown;
-    let userDataDir: string | undefined;
-    if (opts.profile) {
-      if (engine === "chrome") userDataDir = path.join(os.homedir(), ".navia", "profiles", `chrome-${opts.profile}`);
-      else storageState = (await loadSession(opts.profile)) ?? undefined;
-    }
+    const { userDataDir, storageState } = await resolveProfileState(engine, opts.profile, undefined);
     driver = await BrowserDriver.create({
       engine,
       headless: opts.headless,
@@ -66,7 +59,7 @@ export async function startMcpServer(opts: McpOptions): Promise<void> {
     inputSchema: t.input_schema as Record<string, unknown>,
   }));
 
-  const server = new Server({ name: "navia", version: "0.26.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "navia", version: "0.26.1" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 

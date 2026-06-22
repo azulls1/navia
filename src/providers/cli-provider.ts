@@ -21,8 +21,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+import { resolveModel } from "../config.js";
 
 /**
  * Una ÚNICA carpeta scratch por proceso para el modo `claude`. Antes se creaba y borraba
@@ -110,7 +109,7 @@ export async function cliComplete(prompt: string, opts?: CliProviderOptions, ima
     }));
     content.push({ type: "text", text: prompt });
     const body = JSON.stringify({
-      model: opts?.model ?? DEFAULT_MODEL,
+      model: resolveModel(opts?.model),
       max_tokens: 8192,
       messages: [{ role: "user", content: imgs.length ? content : prompt }],
     });

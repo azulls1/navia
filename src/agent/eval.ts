@@ -12,6 +12,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { runNavia, type NaviaOptions, type NaviaMetrics } from "./agent.js";
+import { resolveModel } from "../config.js";
 
 export interface EvalTask {
   task_id: string;
@@ -40,7 +41,6 @@ export interface EvalReport {
   cases: EvalCaseResult[];
 }
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
 
 const JUDGE_TOOL: Anthropic.Tool = {
   name: "verdict",
@@ -65,7 +65,7 @@ export async function judgeTask(
   if (!apiKey) throw new Error("judgeTask requiere ANTHROPIC_API_KEY.");
   const client = new Anthropic({ apiKey, maxRetries: 4 });
   const resp = await client.messages.create({
-    model: opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL,
+    model: resolveModel(opts.model),
     max_tokens: 512,
     tools: [JUDGE_TOOL],
     tool_choice: { type: "tool", name: "verdict" },

@@ -11,12 +11,13 @@ import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { toolDefinitions, dispatchTool, type AgentHooks, type ToolPolicy } from "./tools.js";
-import { loadSession } from "../browser/session-store.js";
 import { cliComplete } from "../providers/cli-provider.js";
 import { createRecorder, preview } from "./trajectory.js";
 import { createWorkspace } from "./workspace.js";
 import { tipsBlockFor } from "./domain-memory.js";
 import type { NaviaOptions, NaviaResult } from "./agent.js";
+import { DEFAULT_MAX_STEPS } from "../config.js";
+import { resolveProfileState, assessLoginReinjection, NEXT_TASK_PREFIX } from "./loop-common.js";
 
 function extractJson(s: string): any | null {
   if (!s) return null;
@@ -95,12 +96,7 @@ async function validateViaCli(
 export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<NaviaResult> {
   const engine = opts.browser ?? "chromium";
 
-  let storageState: unknown;
-  let userDataDir = opts.userDataDir;
-  if (opts.profile) {
-    if (engine === "chrome") userDataDir = userDataDir ?? path.join(os.homedir(), ".navia", "profiles", `chrome-${opts.profile}`);
-    else storageState = (await loadSession(opts.profile)) ?? undefined;
-  }
+  const { userDataDir, storageState } = await resolveProfileState(engine, opts.profile, opts.userDataDir);
 
   const driver = await BrowserDriver.create({
     engine,
@@ -136,7 +132,7 @@ export async function runViaCli(opts: NaviaOptions, hooks: AgentHooks): Promise<
       const snap0 = await driver.snapshot().catch(() => "");
       if (snap0) transcript.push(`NOTA: ya navegué a ${opts.startUrl} y la página YA está abierta. NO pidas la URL.\nOBSERVACIÓN: ${truncate(snap0, 4000)}`);
     }
-    const maxSteps = opts.maxSteps ?? 60;
+    const maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
 
     // Workspace = carpeta-bitácora (memoria) por tarea. Si se pide, la grabación va también allí.
     let ws: Awaited<ReturnType<typeof createWorkspace>>["ws"] | undefined;
@@ -199,14 +195,11 @@ o, si la tarea ya está completa o no puedes continuar:
           const s: string = action.summary ?? "(sin resumen)";
           // Verificación DETERMINISTA de login (mata el falso positivo de "entré" sin haber entrado).
           if (loginContext && loginVerifyFails < 2) {
-            const outcome = await driver.assessLoginOutcome(opts.startUrl);
-            if (outcome.status === "failed") {
+            const reinject = await assessLoginReinjection(driver, opts.startUrl, hooks.log);
+            if (reinject) {
               loginVerifyFails++;
-              hooks.log?.(`🔎 Login NO confirmado: ${outcome.detail}`);
-              await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(outcome.detail) });
-              transcript.push(
-                `VERIFICACIÓN DE LOGIN: NO tuvo éxito (${outcome.detail}). NO declares éxito. Reintenta así: 1 snapshot → reescribe el usuario → fill_credential la contraseña → pulsa 'Ingresar' (el sistema rellena el captcha solo). NO leas ni teclees el captcha tú. Si tras 2-3 intentos sigue fallando, resume el fallo y termina.`,
-              );
+              await recorder.log({ step: totalSteps, type: "login-check", status: "failed", detail: preview(reinject.detail) });
+              transcript.push(reinject.message);
               continue;
             }
           }
@@ -225,7 +218,6 @@ o, si la tarea ya está completa o no puedes continuar:
           }
           summary = s;
           await recorder.log({ step: totalSteps, type: "done", summary: preview(s) });
-          await ws?.writeSummary(s);
           break;
         }
         if (!action.tool) {
@@ -275,13 +267,14 @@ o, si la tarea ya está completa o no puedes continuar:
 
       if (summary === null) summary = `Se alcanzó el máximo de ${maxSteps} pasos sin terminar.`;
 
+      await ws?.writeSummary(summary); // resumen.md SIEMPRE (también en max-steps), igual que el loop API
       hooks.onTaskSummary?.(summary, totalSteps);
       const next = hooks.nextTask ? await hooks.nextTask() : null;
       if (!next) {
         metrics.steps = totalSteps;
         return { summary, steps: totalSteps, metrics };
       }
-      transcript.push(`NUEVA TAREA (misma sesión del navegador): ${next}`);
+      transcript.push(`${NEXT_TASK_PREFIX} ${next}`);
     }
   } finally {
     await driver.close();

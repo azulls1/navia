@@ -27,11 +27,10 @@
  * ```
  */
 import Anthropic from "@anthropic-ai/sdk";
-import os from "node:os";
-import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
-import { loadSession } from "../browser/session-store.js";
 import type { BrowserEngine } from "../browser/launch.js";
+import { resolveModel } from "../config.js";
+import { resolveProfileState } from "./loop-common.js";
 
 export interface ExtractOptions {
   /** Qué extraer, en lenguaje natural. */
@@ -50,7 +49,6 @@ export interface ExtractOptions {
   model?: string;
 }
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
 const MAX_CHARS = 14000; // recorte del contenido para no inflar el prompt/coste.
 
 /** Envuelve schemas con raíz no-objeto para poder usarlos como input_schema de una tool. */
@@ -74,12 +72,7 @@ export async function extract<T = unknown>(opts: ExtractOptions): Promise<T> {
   let driver = opts.driver;
   if (!driver) {
     const engine = opts.browser ?? "chromium";
-    let storageState: unknown;
-    let userDataDir: string | undefined;
-    if (opts.profile) {
-      if (engine === "chrome") userDataDir = path.join(os.homedir(), ".navia", "profiles", `chrome-${opts.profile}`);
-      else storageState = (await loadSession(opts.profile)) ?? undefined;
-    }
+    const { userDataDir, storageState } = await resolveProfileState(engine, opts.profile, undefined);
     driver = await BrowserDriver.create({ engine, headless: opts.headless, userDataDir, storageState });
   }
 
@@ -102,7 +95,7 @@ export async function extract<T = unknown>(opts: ExtractOptions): Promise<T> {
     // Hasta 2 intentos: forzamos la tool; si el modelo no la usa, reintentamos insistiendo.
     for (let attempt = 0; attempt < 2; attempt++) {
       const resp = await client.messages.create({
-        model: opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL,
+        model: resolveModel(opts.model),
         max_tokens: 4096,
         tools: [tool],
         tool_choice: { type: "tool", name: "extract" },

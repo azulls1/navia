@@ -53,6 +53,11 @@ describe("openai-provider · adaptador de formato", () => {
     expect((bad.content[0] as any).input).toEqual({});
   });
 
+  it("respuesta truncada (finish_reason length) → stop_reason max_tokens (no end_turn)", () => {
+    const r = fromOpenAIResponse({ choices: [{ message: { content: "resumen a medi" }, finish_reason: "length" }] });
+    expect(r.stop_reason).toBe("max_tokens");
+  });
+
   it("presets: groq/ollama/openrouter con base URL correcta; env override gana", () => {
     expect(resolveOpenAIPreset("groq").baseURL).toBe("https://api.groq.com/openai/v1");
     expect(resolveOpenAIPreset("ollama").baseURL).toMatch(/localhost:11434/);

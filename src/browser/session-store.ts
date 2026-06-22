@@ -51,17 +51,17 @@ export function decryptJSON(blob: EncryptedBlob, secret: string): unknown {
   return JSON.parse(out.toString("utf8"));
 }
 
-export function profilesDir(): string {
+function profilesDir(): string {
   return path.join(os.homedir(), ".navia", "profiles");
 }
 
-/** Guarda el storageState de un perfil. Devuelve la ruta y si quedó cifrado. */
-export async function saveSession(name: string, state: unknown): Promise<{ file: string; encrypted: boolean }> {
+/** Guarda el storageState de un perfil (cifrado, siempre). Devuelve la ruta del archivo. */
+export async function saveSession(name: string, state: unknown): Promise<{ file: string }> {
   await mkdir(profilesDir(), { recursive: true });
   const file = path.join(profilesDir(), `${name}.json`);
   const payload: EncryptedBlob = encryptJSON(state, resolveSecret()); // cifrado siempre (transparente)
   await writeFile(file, JSON.stringify(payload), "utf8");
-  return { file, encrypted: true };
+  return { file };
 }
 
 /** Carga el storageState de un perfil, o null si no existe. */

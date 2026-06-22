@@ -69,6 +69,18 @@ function toOpenAITools(tools: any[] | undefined): any[] | undefined {
   }));
 }
 
+/**
+ * Traduce `tool_choice` (formato Anthropic) al de OpenAI. CLAVE: respeta el choice FORZADO
+ * (`{type:"tool",name}` → obliga a llamar esa tool), que usa el validador post-tarea (verdict).
+ * Mapearlo siempre a "auto" hacía que el modelo respondiera texto y el validador fallara.
+ */
+function toOpenAIToolChoice(choice: any, hasTools: boolean): any {
+  if (!hasTools) return undefined;
+  if (choice?.type === "tool" && choice.name) return { type: "function", function: { name: choice.name } };
+  if (choice?.type === "any") return "required";
+  return "auto";
+}
+
 /** Extrae el texto de un `content` de bloques Anthropic (ignora imágenes: visión off por defecto). */
 function blocksToText(content: any): string {
   if (typeof content === "string") return content;
@@ -134,15 +146,20 @@ function fromOpenAIResponse(json: any): Anthropic.Message {
     blocks.push({ type: "tool_use", id: tc.id ?? `call_${blocks.length}`, name: tc.function?.name, input });
   }
   const hadToolCalls = (msg.tool_calls ?? []).length > 0;
+  // Mapea finish_reason de OpenAI → stop_reason de Anthropic (fiel: "length"→"max_tokens" para que
+  // un truncamiento NO se confunda con un final limpio en métricas/recorder).
+  const finish = choice.finish_reason;
+  const stop_reason = hadToolCalls ? "tool_use" : finish === "length" ? "max_tokens" : "end_turn";
   return {
     id: json?.id ?? "msg_openai",
     type: "message",
     role: "assistant",
     model: json?.model ?? "openai-compatible",
     content: blocks as any,
-    stop_reason: hadToolCalls ? "tool_use" : "end_turn",
+    stop_reason,
     stop_sequence: null,
-    usage: { input_tokens: json?.usage?.prompt_tokens ?? 0, output_tokens: json?.usage?.completion_tokens ?? 0 } as any,
+    // cache_* van a 0: los endpoints OpenAI-compatible no reportan prompt-caching de Anthropic.
+    usage: { input_tokens: json?.usage?.prompt_tokens ?? 0, output_tokens: json?.usage?.completion_tokens ?? 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } as any,
   } as Anthropic.Message;
 }
 
@@ -162,7 +179,7 @@ export class OpenAICompatClient {
       model: params.model || this.cfg.model,
       messages: toOpenAIMessages(params.system, params.messages),
       tools: toOpenAITools(params.tools),
-      tool_choice: params.tools?.length ? "auto" : undefined,
+      tool_choice: toOpenAIToolChoice(params.tool_choice, !!params.tools?.length),
       max_tokens: params.max_tokens ?? 4096,
       temperature: 0,
     };

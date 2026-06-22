@@ -22,11 +22,10 @@
  * ```
  */
 import Anthropic from "@anthropic-ai/sdk";
-import os from "node:os";
-import path from "node:path";
 import { BrowserDriver } from "../browser/driver.js";
-import { loadSession } from "../browser/session-store.js";
 import type { BrowserEngine } from "../browser/launch.js";
+import { resolveModel } from "../config.js";
+import { resolveProfileState } from "./loop-common.js";
 
 export interface ObserveAction {
   action: "click" | "type" | "select_option" | "press_key";
@@ -66,18 +65,12 @@ export interface ActResult {
   snapshot: string;
 }
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
 const MAX_CHARS = 14000;
 
 async function ensureDriver(opts: ObserveOptions): Promise<{ driver: BrowserDriver; owns: boolean }> {
   if (opts.driver) return { driver: opts.driver, owns: false };
   const engine = opts.browser ?? "chromium";
-  let storageState: unknown;
-  let userDataDir: string | undefined;
-  if (opts.profile) {
-    if (engine === "chrome") userDataDir = path.join(os.homedir(), ".navia", "profiles", `chrome-${opts.profile}`);
-    else storageState = (await loadSession(opts.profile)) ?? undefined;
-  }
+  const { userDataDir, storageState } = await resolveProfileState(engine, opts.profile, undefined);
   return { driver: await BrowserDriver.create({ engine, headless: opts.headless, userDataDir, storageState }), owns: true };
 }
 
@@ -121,7 +114,7 @@ export async function observe(opts: ObserveOptions): Promise<ObserveAction[]> {
     const snapshot = await driver.snapshot();
     const client = new Anthropic({ apiKey, maxRetries: 4 });
     const resp = await client.messages.create({
-      model: opts.model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL,
+      model: resolveModel(opts.model),
       max_tokens: 2048,
       tools: [PROPOSE_TOOL],
       tool_choice: { type: "tool", name: "propose_actions" },

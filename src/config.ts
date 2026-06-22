@@ -11,8 +11,18 @@ export interface NaviaConfig {
   model?: string;
   browser?: BrowserEngine;
   profile?: string;
-  provider?: "auto" | "api" | "claude-cli";
+  provider?: "auto" | "api" | "claude-cli" | "openai";
   workspace?: boolean | string;
+}
+
+/** Modelo de Claude por defecto (única fuente de verdad para todos los módulos). */
+export const DEFAULT_MODEL = "claude-sonnet-4-6";
+/** Máximo de pasos por defecto del loop de agente. */
+export const DEFAULT_MAX_STEPS = 60;
+
+/** Resuelve el modelo: explícito > env NAVIA_MODEL > default. Usado por todos los flujos Anthropic. */
+export function resolveModel(model?: string): string {
+  return model ?? process.env.NAVIA_MODEL ?? DEFAULT_MODEL;
 }
 
 export function configPath(): string {
