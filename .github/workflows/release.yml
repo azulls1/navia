@@ -40,6 +40,8 @@ jobs:
         run: npm install -g npm@latest
       - run: npm ci
       - run: npm run typecheck
+      - name: Instalar Chromium de Playwright (tests de integración)
+        run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
       # Verifica que la versión del tag (vX.Y.Z) coincida con package.json antes de publicar.
