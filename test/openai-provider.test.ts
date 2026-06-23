@@ -64,10 +64,12 @@ describe("openai-provider · adaptador de formato", () => {
     expect(r.stop_reason).toBe("max_tokens");
   });
 
-  it("presets: groq/ollama/openrouter con base URL correcta; env override gana", () => {
+  it("presets: groq/ollama/openrouter/deepseek con base URL correcta; env override gana", () => {
     expect(resolveOpenAIPreset("groq").baseURL).toBe("https://api.groq.com/openai/v1");
     expect(resolveOpenAIPreset("ollama").baseURL).toMatch(/localhost:11434/);
     expect(resolveOpenAIPreset("openrouter").baseURL).toBe("https://openrouter.ai/api/v1");
+    expect(resolveOpenAIPreset("deepseek").baseURL).toBe("https://api.deepseek.com/v1");
+    expect(resolveOpenAIPreset("deepseek").model).toBe("deepseek-chat");
     process.env.NAVIA_OPENAI_MODEL = "mi-modelo";
     expect(resolveOpenAIPreset("groq").model).toBe("mi-modelo");
     delete process.env.NAVIA_OPENAI_MODEL;

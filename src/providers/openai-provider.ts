@@ -53,6 +53,11 @@ export function resolveOpenAIPreset(preset: string | undefined): OpenAIPresetCon
       // Local: no requiere API key (se manda una dummy porque algunos clientes la exigen).
       cfg = { label: "Ollama (local)", baseURL: "http://localhost:11434/v1", apiKey: "ollama", model: "qwen3:14b" };
       break;
+    case "deepseek":
+      // DeepSeek (OpenAI-compatible, muy barato; también disponible GRATIS vía OpenRouter `:free`).
+      // Streaming sin activar: usamos el camino no-streaming (robusto) por defecto.
+      cfg = { label: "DeepSeek", baseURL: "https://api.deepseek.com/v1", apiKey: env.DEEPSEEK_API_KEY, model: "deepseek-chat" };
+      break;
     default:
       // Sin preset → endpoint genérico por env (NAVIA_OPENAI_*). Sirve para cualquier proveedor.
       cfg = { label: "OpenAI-compatible", baseURL: baseOverride ?? "http://localhost:11434/v1", apiKey: keyOverride, model: modelOverride ?? "qwen3:14b" };

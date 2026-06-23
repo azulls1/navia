@@ -265,26 +265,33 @@ Tips are also captured automatically from your `wait_for_human` notes. Disable w
 
 Navia works **without an Anthropic key**. The wizard auto-detects what you have; you have three free routes:
 
-### A) Free AI models — local or cloud (`--provider openai`)
-Any **OpenAI-compatible** endpoint works (most free models expose one), via presets:
+### A) Free (or near-free) AI models — local or cloud (`--provider openai`)
+**No Anthropic key, no `claude` CLI? No problem.** Any **OpenAI-compatible** endpoint works — and most free/cheap models (Ollama, Groq, OpenRouter, DeepSeek, Together, Gemini-beta…) expose one. Built-in presets:
 
 ```bash
-# Local, private, unlimited — needs Ollama + a model
+# 🦙 Ollama — local, private, unlimited, 100% FREE (needs Ollama + a model)
 ollama pull qwen3:14b
 navia "log into my-portal.com and update my phone number" --provider openai --openai-preset ollama
 
-# Cloud, fast, free API key (no card) → console.groq.com/keys
+# ☁️ Groq — FREE API key, no card, very fast → console.groq.com/keys
 setx GROQ_API_KEY gsk_...        # (PowerShell: $env:GROQ_API_KEY="gsk_...")
-navia "..." --provider openai --openai-preset groq        # model: qwen3-32b
+navia "..." --provider openai --openai-preset groq           # model: qwen3-32b
 
-# OpenRouter (many :free models) — get a key at openrouter.ai
+# 🔀 OpenRouter — many models, including FREE ones (e.g. DeepSeek `:free`) → openrouter.ai
+setx OPENROUTER_API_KEY sk-or-...
 navia "..." --provider openai --openai-preset openrouter
 
-# Any other OpenAI-compatible endpoint (DeepSeek, Together, vLLM, LM Studio…):
+# 🐋 DeepSeek — OpenAI-compatible, ultra-cheap (or FREE via OpenRouter) → platform.deepseek.com
+setx DEEPSEEK_API_KEY sk-...
+navia "..." --provider openai --openai-preset deepseek       # model: deepseek-chat
+
+# 🧩 Any other OpenAI-compatible endpoint (Together, vLLM, LM Studio…):
 #   NAVIA_OPENAI_BASE_URL, NAVIA_OPENAI_API_KEY, NAVIA_OPENAI_MODEL
 ```
 
-**Recommended free models (2026):** `qwen3-32b` via **Groq** (cloud, no card, strong tool-use) or **Ollama** `qwen3:14b`/`qwen3:32b` (local, private). Qwen3 is Apache-2.0 with the most reliable open tool-calling on consumer hardware. Vision is off on this route (the local captcha OCR still works). With Groq/OpenRouter you get **real-time token streaming** in the terminal, and the client retries transient errors with **exponential backoff + jitter**. Note: free open models are less reliable than Claude on long multi-step loops — expect more retries.
+If you have **none** of those (no key, no CLI), just run `navia`: the interactive wizard offers the zero-setup free routes (**Ollama** local / **Groq** cloud) and walks you through it. The other presets (`openrouter`, `deepseek`) are one flag away: `--provider openai --openai-preset <name>`.
+
+**Recommended (2026):** `qwen3-32b` via **Groq** (cloud, no card, strong tool-use) or **Ollama** `qwen3:14b`/`qwen3:32b` (local, private). Qwen3 is Apache-2.0 with the most reliable open tool-calling on consumer hardware. **DeepSeek** (`deepseek-chat`) is a strong ultra-cheap alternative — and free through OpenRouter's `:free` variants. Vision is off on this route (the local captcha OCR still works). With Groq/OpenRouter you get **real-time token streaming** in the terminal, and the client retries transient errors with **exponential backoff + jitter**. Note: free open models are less reliable than Claude on long multi-step loops — expect more retries.
 
 ### B) Your terminal's AI CLI (uses your Claude subscription)
 ```bash

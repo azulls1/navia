@@ -47,7 +47,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.28.1");
+  .version("0.29.0");
 
 // `navia run "tarea"` — también es el comando por defecto: `navia "tarea"`.
 browserOpt(
