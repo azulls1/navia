@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { takeSnapshot, REF_ATTR } from "./snapshot.js";
 import { parseAxTree, type AXNode } from "./cdp-snapshot.js";
+import { findTextCaptcha, classifyChallenge, assessLogin, type LoginAssessment } from "./challenge.js";
 import { launchBrowser, closeSession, type BrowserSession, type LaunchOptions, type BrowserEngine } from "./launch.js";
 
 /**
@@ -512,21 +513,12 @@ export class BrowserDriver {
    */
   async detectChallenge(): Promise<string | null> {
     try {
-      const url = this.page.url().toLowerCase();
-      const title = (await this.page.title().catch(() => "")).toLowerCase();
-      if (title.includes("just a moment") || title.includes("checking your browser") || title.includes("attention required"))
-        return "Cloudflare";
-      if (url.includes("challenges.cloudflare.com") || url.includes("/cdn-cgi/challenge")) return "Cloudflare";
       // page.frames() incluye iframes cross-origin (Turnstile vive en uno).
       const frameUrls = this.page
         .frames()
-        .map((f) => f.url().toLowerCase())
+        .map((f) => f.url())
         .join(" ");
-      if (frameUrls.includes("turnstile") || frameUrls.includes("challenges.cloudflare.com")) return "Cloudflare Turnstile";
-      if (frameUrls.includes("hcaptcha.com")) return "hCaptcha";
-      if (frameUrls.includes("recaptcha")) return "reCAPTCHA";
-      if (frameUrls.includes("captcha-delivery.com")) return "DataDome";
-      return null;
+      return classifyChallenge({ url: this.page.url(), title: await this.page.title().catch(() => ""), frameUrls });
     } catch {
       return null;
     }
@@ -556,45 +548,7 @@ export class BrowserDriver {
    */
   async detectTextCaptcha(): Promise<{ present: boolean; empty: boolean; imgRef?: string; inputRef?: string }> {
     try {
-      const found = (await this.page.evaluate(() => {
-        const norm = (s: string | null | undefined) => (s || "").toLowerCase();
-        const reAttr = /captcha|c[oó]?digo|codigo|imagen|image|verif|seguridad|security|caracteres|characters/i;
-        const reLabel = /(enter|type|ingresa|escribe|introduce)[\s\S]{0,30}(text|texto|c[oó]digo|code|characters|caracteres)|(texto|c[oó]digo|code)[\s\S]{0,20}(imagen|image)|security code|c[oó]digo de seguridad/i;
-        const isCapImg = (img: HTMLImageElement) => {
-          const w = img.naturalWidth || img.width,
-            h = img.naturalHeight || img.height;
-          if (!w || !h) return false;
-          const ratio = w / h,
-            src = norm(img.src);
-          return w >= 50 && w <= 420 && h >= 16 && h <= 160 && ratio > 1.4 && !/(logo|icon|sprite|avatar|banner|header)/.test(src);
-        };
-        const inputs = Array.from(document.querySelectorAll("input")).filter((i) => {
-          const t = (i.getAttribute("type") || "text").toLowerCase();
-          return ["text", "", "tel", "number"].includes(t);
-        }) as HTMLInputElement[];
-        let best: { inp: HTMLInputElement; img: HTMLImageElement | null; score: number } | null = null;
-        for (const inp of inputs) {
-          const attrs = norm([inp.name, inp.id, inp.className, inp.placeholder, inp.getAttribute("aria-label")].join(" "));
-          let score = reAttr.test(attrs) ? 2 : 0;
-          let labelText = "";
-          if (inp.id) {
-            const l = document.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
-            if (l) labelText = norm(l.textContent);
-          }
-          const ctx = norm((inp.closest("div,td,fieldset,form,section") as HTMLElement | null)?.textContent);
-          if (reLabel.test(labelText) || reLabel.test(ctx)) score += 2;
-          const scope = (inp.closest("div,td,fieldset,form,section") as HTMLElement | null) || document.body;
-          const img = (Array.from(scope.querySelectorAll("img")) as HTMLImageElement[]).find(isCapImg) || null;
-          if (img) score += 1; // la imagen corrobora pero no basta sola (evita falsos positivos)
-          // Requiere señal fuerte de captcha (atributo o label), no solo "input cerca de img".
-          const strong = reAttr.test(attrs) || reLabel.test(labelText) || reLabel.test(ctx);
-          if (strong && (!best || score > best.score)) best = { inp, img, score };
-        }
-        if (!best) return { present: false, empty: false, hasImg: false };
-        best.inp.setAttribute("data-navia-cap-input", "1");
-        if (best.img) best.img.setAttribute("data-navia-cap-img", "1");
-        return { present: true, empty: (best.inp.value || "").trim() === "", hasImg: !!best.img };
-      })) as { present: boolean; empty: boolean; hasImg: boolean };
+      const found = await this.page.evaluate(findTextCaptcha);
 
       if (!found?.present) return { present: false, empty: false };
       const inputRef = await this.refForSelector("[data-navia-cap-input]");
@@ -620,7 +574,7 @@ export class BrowserDriver {
    *  - success: ya NO hay password Y (enlace de sesión visible o URL salió del login).
    *  - unknown: no se puede afirmar.
    */
-  async assessLoginOutcome(loginUrl?: string): Promise<{ status: "success" | "failed" | "unknown"; detail: string }> {
+  async assessLoginOutcome(loginUrl?: string): Promise<LoginAssessment> {
     const url = this.page.url();
     let stillPassword = false;
     try {
@@ -628,17 +582,8 @@ export class BrowserDriver {
     } catch {
       /* noop */
     }
-    const text = (await this.readText().catch(() => "")).toLowerCase();
-    const errorRe =
-      /captcha\s+(incorrect|inv[aá]lid|no coincide|err[oó]ne)|c[oó]digo\s+(incorrect|inv[aá]lid)|texto[\s\S]{0,20}(incorrect|no coincide)|usuario o contrase|credenciales\s+(inv|incorrect)|datos incorrectos|intente de nuevo|vuelva? a intentar|inicio de sesi[oó]n fallid|incorrect (password|username)|invalid (credentials|captcha)/i;
-    const sessionRe = /cerrar sesi[oó]n|cerrar sesion|logout|log out|sign\s?out|mi cuenta|mi perfil|salir\b/i;
-    const loginUrlRe = /login|signin|sign-in|acceso|autenticaci|iniciar.?sesi/i;
-    if (errorRe.test(text)) return { status: "failed", detail: "la página muestra un error de login/captcha" };
-    const movedAway = !!loginUrl && url !== loginUrl && !loginUrlRe.test(url.toLowerCase());
-    if (!stillPassword && (sessionRe.test(text) || movedAway))
-      return { status: "success", detail: sessionRe.test(text) ? "enlace de sesión visible y sin formulario de login" : "saliste de la URL de login y no hay formulario" };
-    if (stillPassword) return { status: "failed", detail: "sigues en el formulario de login (el campo de contraseña sigue presente)" };
-    return { status: "unknown", detail: "no se pudo confirmar el resultado del login" };
+    const text = await this.readText().catch(() => "");
+    return assessLogin({ url, stillPassword, text, loginUrl });
   }
 
   async navigateBack(): Promise<void> {
