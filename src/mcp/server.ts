@@ -74,7 +74,7 @@ export async function startMcpServer(opts: McpOptions): Promise<void> {
 
   const tools = buildMcpToolList(TOOL_DEFINITIONS);
 
-  const server = new Server({ name: "navia", version: "0.28.1" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "navia", version: "0.28.0" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
