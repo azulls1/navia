@@ -19,6 +19,8 @@ export interface NaviaConfig {
 export const DEFAULT_MODEL = "claude-sonnet-4-6";
 /** Máximo de pasos por defecto del loop de agente. */
 export const DEFAULT_MAX_STEPS = 60;
+/** Recorte del contenido de página inyectado al prompt en extract/observe (control de coste). */
+export const EXTRACT_MAX_CHARS = 14000;
 
 /** Resuelve el modelo: explícito > env NAVIA_MODEL > default. Usado por todos los flujos Anthropic. */
 export function resolveModel(model?: string): string {

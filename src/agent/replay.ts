@@ -24,6 +24,19 @@ export interface ReplayResult {
 
 const READ_ONLY = new Set(["snapshot", "read_text", "list_downloads", "screenshot"]);
 
+/** Resuelve una credencial del vault para el replay; lanza si no existe. */
+async function resolveCredential(key: string): Promise<string> {
+  const v = await getSecret(key);
+  if (v == null) throw new Error(`secreto "${key}" no existe`);
+  return v;
+}
+/** Calcula el código TOTP actual desde el vault para el replay; lanza si no existe el secreto. */
+async function resolveTotpCode(key: string): Promise<string> {
+  const sec = await getTotpSecret(key);
+  if (!sec) throw new Error(`TOTP "${key}" no existe`);
+  return totp(sec);
+}
+
 export async function replayMacro(file: string, opts: NaviaOptions, log?: (m: string) => void): Promise<ReplayResult> {
   const raw = await readFile(file, "utf8");
   const steps = raw
@@ -129,19 +142,13 @@ async function replayOne(driver: BrowserDriver, s: any, log?: (m: string) => voi
         return;
       case "upload_file":
         return loc.setInputFiles(a.paths ?? []);
-      case "fill_credential": {
-        const v = await getSecret(a.key);
-        if (v == null) throw new Error(`secreto "${a.key}" no existe`);
+      case "fill_credential":
         await loc.fill("");
-        await loc.fill(v);
+        await loc.fill(await resolveCredential(a.key));
         return;
-      }
-      case "fill_totp": {
-        const sec = await getTotpSecret(a.key);
-        if (!sec) throw new Error(`TOTP "${a.key}" no existe`);
-        await loc.fill(totp(sec));
+      case "fill_totp":
+        await loc.fill(await resolveTotpCode(a.key));
         return;
-      }
       default:
         throw new Error(`tool no soportado en replay: ${s.tool}`);
     }
@@ -158,16 +165,10 @@ async function replayOne(driver: BrowserDriver, s: any, log?: (m: string) => voi
         return driver.selectOption(ref, (a.values ?? []) as string[]);
       case "upload_file":
         return driver.uploadFile(ref, (a.paths ?? []) as string[]);
-      case "fill_credential": {
-        const v = await getSecret(a.key);
-        if (v == null) throw new Error(`secreto "${a.key}" no existe`);
-        return driver.type(ref, v);
-      }
-      case "fill_totp": {
-        const sec = await getTotpSecret(a.key);
-        if (!sec) throw new Error(`TOTP "${a.key}" no existe`);
-        return driver.type(ref, totp(sec));
-      }
+      case "fill_credential":
+        return driver.type(ref, await resolveCredential(a.key));
+      case "fill_totp":
+        return driver.type(ref, await resolveTotpCode(a.key));
       default:
         throw new Error(`tool no soportado en replay: ${s.tool}`);
     }

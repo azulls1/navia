@@ -21,6 +21,8 @@ export interface OpenAIPresetConfig {
   /** Cabecera(s) extra que algún proveedor requiere (p.ej. OpenRouter recomienda Referer/Title). */
   headers?: Record<string, string>;
   label: string;
+  /** ¿El proveedor soporta streaming SSE fiable? Capacidad explícita (no se infiere del label). */
+  supportsStream?: boolean;
 }
 
 /** Presets listos para los proveedores gratis más recomendados (deep-research 2026). */
@@ -35,7 +37,7 @@ export function resolveOpenAIPreset(preset: string | undefined): OpenAIPresetCon
   let cfg: OpenAIPresetConfig;
   switch (p) {
     case "groq":
-      cfg = { label: "Groq", baseURL: "https://api.groq.com/openai/v1", apiKey: env.GROQ_API_KEY, model: "qwen3-32b" };
+      cfg = { label: "Groq", baseURL: "https://api.groq.com/openai/v1", apiKey: env.GROQ_API_KEY, model: "qwen3-32b", supportsStream: true };
       break;
     case "openrouter":
       cfg = {
@@ -44,6 +46,7 @@ export function resolveOpenAIPreset(preset: string | undefined): OpenAIPresetCon
         apiKey: env.OPENROUTER_API_KEY,
         model: "qwen/qwen3-32b",
         headers: { "HTTP-Referer": "https://github.com/azulls1/navia", "X-Title": "Navia" },
+        supportsStream: true,
       };
       break;
     case "ollama":
@@ -171,6 +174,9 @@ export type StreamHook = (chunk: string) => void;
  * Exponencial (no lineal) para no amplificar la sobrecarga del proveedor ante 429/5xx; jitter para
  * desincronizar reintentos concurrentes. Defaults: base 500ms, cap 30s.
  */
+/** Máximo de intentos totales (incluye el primero) ante errores transitorios 429/5xx/red. */
+const MAX_ATTEMPTS = 4;
+
 export function calcDelay(attempt: number, base = 500, cap = 30_000): number {
   const jitter = Math.random() * 200;
   return Math.min(base * Math.pow(2, attempt) + jitter, cap);
@@ -219,18 +225,18 @@ export class OpenAICompatClient {
     const url = this.cfg.baseURL.replace(/\/$/, "") + "/chat/completions";
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(this.cfg.headers ?? {}) };
     if (this.cfg.apiKey) headers.Authorization = `Bearer ${this.cfg.apiKey}`;
-    // Streaming solo si hay hook Y el proveedor lo soporta bien (Groq/OpenRouter).
-    const useStream = !!this.streamHook && (this.cfg.label === "Groq" || this.cfg.label === "OpenRouter");
+    // Streaming solo si hay hook Y el proveedor declara soportarlo (capacidad explícita del preset).
+    const useStream = !!this.streamHook && !!this.cfg.supportsStream;
 
     let lastErr: Error | null = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         return useStream ? await this.attemptStream(url, headers, body) : await this.attemptOnce(url, headers, body);
       } catch (e) {
         const err = e as RetryError;
         lastErr = err;
         if (err.fastFail) throw err; // 4xx no-429 → no reintentar
-        if (attempt === 3) break; // último intento: sin sleep
+        if (attempt === MAX_ATTEMPTS - 1) break; // último intento: sin sleep
         const waitMs = calcDelay(attempt);
         this.onRetry?.(attempt + 1, waitMs, err.reason ?? err.message);
         await this.sleep(waitMs);

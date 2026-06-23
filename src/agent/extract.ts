@@ -29,7 +29,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { BrowserDriver } from "../browser/driver.js";
 import type { BrowserEngine } from "../browser/launch.js";
-import { resolveModel } from "../config.js";
+import { resolveModel, EXTRACT_MAX_CHARS } from "../config.js";
 import { resolveProfileState } from "./loop-common.js";
 import { createAnthropic } from "../providers/anthropic-client.js";
 
@@ -49,8 +49,6 @@ export interface ExtractOptions {
   apiKey?: string;
   model?: string;
 }
-
-const MAX_CHARS = 14000; // recorte del contenido para no inflar el prompt/coste.
 
 /** Envuelve schemas con raíz no-objeto para poder usarlos como input_schema de una tool. */
 function asObjectSchema(schema: Record<string, any>): { schema: Anthropic.Tool["input_schema"]; wrapped: boolean } {
@@ -80,7 +78,7 @@ export async function extract<T = unknown>(opts: ExtractOptions): Promise<T> {
   try {
     if (opts.url) await driver.navigate(opts.url);
     const [text, snapshot] = await Promise.all([driver.readText().catch(() => ""), driver.snapshot().catch(() => "")]);
-    const pageContent = `TEXTO DE LA PÁGINA:\n${text}\n\nESTRUCTURA (árbol de accesibilidad):\n${snapshot}`.slice(0, MAX_CHARS);
+    const pageContent = `TEXTO DE LA PÁGINA:\n${text}\n\nESTRUCTURA (árbol de accesibilidad):\n${snapshot}`.slice(0, EXTRACT_MAX_CHARS);
 
     const { schema, wrapped } = asObjectSchema(opts.schema);
     const client = createAnthropic(apiKey);

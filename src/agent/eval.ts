@@ -77,7 +77,7 @@ export async function judgeTask(
     ],
   });
   const tu = resp.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "verdict");
-  const v = tu?.input as any;
+  const v = tu?.input as { success?: boolean; reason?: string } | undefined;
   return { success: !!v?.success, reason: v?.reason ?? "" };
 }
 

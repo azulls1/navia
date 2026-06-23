@@ -68,8 +68,6 @@ export interface NaviaOptions {
   captcha?: "off" | "local";
 }
 
-/** Métricas de fiabilidad/coste de una corrida (más allá de éxito binario). */
-
 export interface NaviaResult {
   /** Resumen final en texto que devuelve la IA. */
   summary: string;

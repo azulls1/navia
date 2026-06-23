@@ -24,7 +24,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { BrowserDriver } from "../browser/driver.js";
 import type { BrowserEngine } from "../browser/launch.js";
-import { resolveModel } from "../config.js";
+import { resolveModel, EXTRACT_MAX_CHARS } from "../config.js";
 import { resolveProfileState } from "./loop-common.js";
 import { createAnthropic } from "../providers/anthropic-client.js";
 
@@ -65,8 +65,6 @@ export interface ActResult {
   url: string;
   snapshot: string;
 }
-
-const MAX_CHARS = 14000;
 
 async function ensureDriver(opts: ObserveOptions): Promise<{ driver: BrowserDriver; owns: boolean }> {
   if (opts.driver) return { driver: opts.driver, owns: false };
@@ -122,12 +120,12 @@ export async function observe(opts: ObserveOptions): Promise<ObserveAction[]> {
       messages: [
         {
           role: "user",
-          content: `Instrucción: ${opts.instruction}\n\nDevuelve SOLO las acciones candidatas (no ejecutes nada) llamando a propose_actions, en orden. Usa refs EXACTOS del snapshot.\n\nSNAPSHOT:\n${snapshot.slice(0, MAX_CHARS)}`,
+          content: `Instrucción: ${opts.instruction}\n\nDevuelve SOLO las acciones candidatas (no ejecutes nada) llamando a propose_actions, en orden. Usa refs EXACTOS del snapshot.\n\nSNAPSHOT:\n${snapshot.slice(0, EXTRACT_MAX_CHARS)}`,
         },
       ],
     });
     const tu = resp.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "propose_actions");
-    const actions = ((tu?.input as any)?.actions ?? []) as ObserveAction[];
+    const actions = ((tu?.input as { actions?: ObserveAction[] } | undefined)?.actions ?? []) as ObserveAction[];
     return opts.limit ? actions.slice(0, opts.limit) : actions;
   } finally {
     if (owns) await driver.close();

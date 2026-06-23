@@ -5,7 +5,7 @@ import { __test, resolveOpenAIPreset, OpenAICompatClient } from "../src/provider
 const { toOpenAITools, toOpenAIMessages, fromOpenAIResponse, calcDelay } = __test;
 
 const noSleep = async () => {}; // sleep inyectado no-op → tests sin temporizadores reales
-const cfg = (over: Partial<{ label: string; baseURL: string }> = {}) => ({ label: over.label ?? "Groq", baseURL: over.baseURL ?? "https://api.groq.com/openai/v1", apiKey: "k", model: "m" });
+const cfg = (over: Partial<{ label: string; baseURL: string }> = {}) => ({ label: over.label ?? "Groq", baseURL: over.baseURL ?? "https://api.groq.com/openai/v1", apiKey: "k", model: "m", supportsStream: true });
 const okJSON = (obj: any) => new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json" } });
 afterEach(() => vi.unstubAllGlobals());
 

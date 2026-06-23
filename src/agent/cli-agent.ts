@@ -176,7 +176,8 @@ o, si la tarea ya está completa o no puedes continuar:
           pendingImages = [];
           raw = await cliComplete(prompt, { command: opts.cliCommand, model: opts.model, timeoutMs: 180000 }, attach);
         } catch (e) {
-          return { summary: `Error del proveedor CLI: ${(e as Error).message}`, steps: totalSteps };
+          metrics.steps = totalSteps;
+          return { summary: `Error del proveedor CLI: ${(e as Error).message}`, steps: totalSteps, metrics };
         }
 
         const action = extractJson(raw);
