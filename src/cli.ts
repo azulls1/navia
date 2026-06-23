@@ -45,7 +45,7 @@ const program = new Command();
 program
   .name("navia")
   .description("Agente de navegador autónomo con IA (Claude). Opera Chrome o Firefox reales con una instrucción.")
-  .version("0.27.0");
+  .version("0.28.0");
 
 interface RunFlags {
   browser: BrowserEngine;
@@ -616,9 +616,15 @@ program
   .option("-p, --profile <name>", "perfil guardado con 'navia login'")
   .option("-m, --model <model>", "modelo de Claude")
   .option("--headless", "ejecutar sin ventana visible")
-  .action(async (instruccion: string | undefined, opts: { url?: string; schema?: string; browser: BrowserEngine; profile?: string; model?: string; headless?: boolean }) => {
+  .option("--format <fmt>", "formato de salida: json | csv | ndjson", "json")
+  .option("--out <archivo>", "escribir el resultado en un archivo (por defecto: stdout)")
+  .action(async (instruccion: string | undefined, opts: { url?: string; schema?: string; browser: BrowserEngine; profile?: string; model?: string; headless?: boolean; format: string; out?: string }) => {
     if (!instruccion || !opts.schema) {
-      console.error(pc.red("✗ Uso: navia extract \"qué extraer\" --schema schema.json [--url https://...]"));
+      console.error(pc.red("✗ Uso: navia extract \"qué extraer\" --schema schema.json [--url https://...] [--format csv|ndjson] [--out archivo]"));
+      process.exit(1);
+    }
+    if (!["json", "csv", "ndjson"].includes(opts.format)) {
+      console.error(pc.red(`✗ --format inválido "${opts.format}"; usa json | csv | ndjson.`));
       process.exit(1);
     }
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -645,7 +651,23 @@ program
         model: opts.model,
         headless: opts.headless,
       });
-      console.log(JSON.stringify(data, null, 2));
+      let outStr: string;
+      let count = "";
+      if (opts.format === "json") {
+        outStr = JSON.stringify(data, null, 2);
+      } else {
+        const { toCSV, toNDJSON, resultToRows } = await import("./agent/export.js");
+        const rows = resultToRows(data);
+        count = `${rows.length} fila(s) `;
+        outStr = opts.format === "csv" ? toCSV(rows) : toNDJSON(rows);
+      }
+      if (opts.out) {
+        const { writeFile } = await import("node:fs/promises");
+        await writeFile(opts.out, outStr, "utf8");
+        console.log(pc.green(`✓ ${count}escritas en ${opts.out} (${opts.format}).`));
+      } else {
+        console.log(outStr);
+      }
     } catch (err) {
       console.error(pc.red(`\n✗ Error: ${(err as Error).message}`));
       process.exitCode = 1;

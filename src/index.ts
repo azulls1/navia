@@ -34,3 +34,4 @@ export type { ReplayResult } from "./agent/replay.js";
 export { setSecret, setTotp, getSecret, getTotpSecret, listKeys, getSecretOrigins, setSecretOrigins, normalizeOrigin } from "./secrets/vault.js";
 export { addTip, loadPlaybook, listPlaybooks, formatTips, domainOf, tipsBlockFor } from "./agent/domain-memory.js";
 export type { Tip, Playbook } from "./agent/domain-memory.js";
+export { toCSV, toNDJSON, resultToRows } from "./agent/export.js";

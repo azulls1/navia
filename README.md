@@ -315,7 +315,12 @@ Get schema-validated data: Navia forces the model to answer through a tool whose
 
 ```bash
 navia extract "the first 5 products with name and price" --url https://example-shop.com --schema ./schema.json
+
+# Export straight to CSV or NDJSON (to stdout, or to a file with --out):
+navia extract "all clients with name, email and status" --url ... --schema ./clients.json --format csv --out clients.csv
 ```
+
+Formats: `json` *(default)* · `csv` (RFC-4180, quotes/escapes safely) · `ndjson` (one JSON object per line). From the library you can reuse the same exporters: `import { toCSV, toNDJSON, resultToRows } from "navia-ai"`.
 
 <details>
 <summary><b>Library example</b></summary>

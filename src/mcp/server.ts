@@ -8,6 +8,7 @@
  *
  * Reutiliza TOOL_DEFINITIONS + dispatchTool (una sola fuente de verdad de las tools).
  */
+import type Anthropic from "@anthropic-ai/sdk";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -25,8 +26,26 @@ export interface McpOptions {
   cdpEndpoint?: string;
 }
 
+/** Forma de una herramienta tal como la espera el catálogo MCP. */
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 // confirm_action / wait_for_human asumen TTY: en MCP el humano aprueba en su cliente.
-const EXCLUDED = new Set(["confirm_action", "wait_for_human"]);
+export const EXCLUDED = new Set(["confirm_action", "wait_for_human"]);
+
+/**
+ * Construye el catálogo de herramientas MCP a partir de las definiciones de Navia: filtra las
+ * que asumen TTY (EXCLUDED) y mapea el resto a la forma `{ name, description, inputSchema }`.
+ * Pura → testeable sin levantar el transporte stdio.
+ */
+export function buildMcpToolList(defs: Anthropic.Tool[]): McpTool[] {
+  return defs
+    .filter((t) => !EXCLUDED.has(t.name))
+    .map((t) => ({ name: t.name, description: t.description ?? "", inputSchema: t.input_schema as Record<string, unknown> }));
+}
 
 export async function startMcpServer(opts: McpOptions): Promise<void> {
   const engine = opts.browser ?? "chromium";
@@ -53,13 +72,9 @@ export async function startMcpServer(opts: McpOptions): Promise<void> {
     log: (m) => console.error(`[navia] ${m}`),
   };
 
-  const tools = TOOL_DEFINITIONS.filter((t) => !EXCLUDED.has(t.name)).map((t) => ({
-    name: t.name,
-    description: t.description ?? "",
-    inputSchema: t.input_schema as Record<string, unknown>,
-  }));
+  const tools = buildMcpToolList(TOOL_DEFINITIONS);
 
-  const server = new Server({ name: "navia", version: "0.27.0" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "navia", version: "0.28.0" }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 

@@ -269,3 +269,6 @@ o, si la tarea ya está completa o no puedes continuar:
     await driver.close();
   }
 }
+
+/** Helpers internos expuestos para tests unitarios (sin afectar el runtime de runViaCli). */
+export const __test = { extractJson, truncate, pruneTranscript };
